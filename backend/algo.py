@@ -72,8 +72,8 @@ class JamiesonJainAlgo:
     def update(self, arm_idx, reward):
         """Update empirical means and the discovery set (BH)."""
         # 1. Standard empirical mean update
-        n = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + reward) / (n + 1)
+        n = self.counts[arm_idx] # Current number of pulls for this arm
+        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + reward) / (n + 1) # New mean
         self.counts[arm_idx] += 1
         self.time += 1
         
