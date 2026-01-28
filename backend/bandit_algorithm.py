@@ -147,8 +147,7 @@ class BanditExperiment:
                     term_S = (1 - 2 * delta_prime * (1 + 4 * delta_prime)) * len(self.S)
                     
                     chi_t = self.n - term_S + term_complex
-                    #chi_t = self.n - ((1 - 2 * delta_prime * (1 + 4 * delta_prime)) * len(self.S)) + term_complex
-                    
+                                        
                     # Update R_{t+1}
                     new_discoveries = []
                     for i in self.S:
