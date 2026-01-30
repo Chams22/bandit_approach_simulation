@@ -394,11 +394,11 @@ if __name__ == "__main__":
     
     # Paramètres raisonnables pour un test rapide
     essai = EssaiCliniqueEfficace(
-        n_traitements=8,          # Moins de bras pour aller vite
+        n_traitements=50,          # Moins de bras pour aller vite
         efficacite_reference=30,
-        delta=0.05,
+        delta=0.01,
         duree_jours=10,          # Plus court
-        patients_par_jour=5       # Moins de patients par jour
+        patients_par_jour=50       # Moins de patients par jour
     )
     
     try:
