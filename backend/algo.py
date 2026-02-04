@@ -122,6 +122,7 @@ class UniformAlgo:
 
 def run_experiment(true_means, horizon, mode, n_simulations=20):
     n_arms = len(true_means)
+    all_data=[[] for i in range(n_arms)]
     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
     
     tpr_history_sum = np.zeros(horizon)
@@ -161,6 +162,7 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
             
             else:
                 observation = np.random.normal(loc=true_means[arm], scale=1.0)
+                all_data[arm].append(observation)
                 algo.update(arm, observation)
                 
                 nb_found = len(algo.S_t.intersection(true_positives))
@@ -210,8 +212,8 @@ if __name__ == "__main__":
     n_arms = len(true_means)
     
     # 1. Run Simulations
-    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', n_sims)
-    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', n_sims)
+    tpr_unif, _, counts_unif_mean, counts_unif_list, all_data = run_experiment(true_means, horizon, 'uniform', n_sims)
+    tpr_adapt, _, counts_adapt_mean, counts_adapt_list, all_data = run_experiment(true_means, horizon, 'adaptive', n_sims)
     
     # --- PLOT 1: TPR ---
     plt.figure(1, figsize=(10, 5))
@@ -221,7 +223,7 @@ if __name__ == "__main__":
     plt.title("Discovery speed (TPR)")
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure/figure1.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_real_time/figure1.png", dpi=300, bbox_inches="tight")
 
 
     # --- PLOT 2: PULL EVOLUTION ---
@@ -250,7 +252,7 @@ if __name__ == "__main__":
     plt.ylabel("Number of pulls ($T_i(t)$)")
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure/figure2.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_real_time/figure2.png", dpi=300, bbox_inches="tight")
 
 
     # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
@@ -280,6 +282,5 @@ if __name__ == "__main__":
     plt.legend(loc='upper left')
     plt.grid(True, alpha=0.3)
     
-    print("Displaying plots...")
     plt.tight_layout()
-    plt.savefig(git_root / "figure/figure3.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_real_time/figure3.png", dpi=300, bbox_inches="tight")

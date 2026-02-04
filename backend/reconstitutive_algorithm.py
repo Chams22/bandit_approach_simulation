@@ -120,7 +120,23 @@ class UniformAlgo:
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 
-def run_experiment(true_means, horizon, mode, n_simulations=20):
+def prepare_experiment(true_means, horizon, n_sims):
+    n_arms = len(true_means)
+    all_arm_data_by_sim=[]
+    for sim in range(n_sims):
+        all_arm_data=[]   
+        for arm in range(n_arms):
+            result_arm=[]
+            for t in range(horizon):
+                observation = np.random.normal(loc=true_means[arm], scale=1.0) #fixer le seed?
+                result_arm.append(observation)
+            all_arm_data.append(result_arm)
+        all_arm_data_by_sim.append(all_arm_data)
+    return all_arm_data_by_sim
+        
+
+def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
+
     n_arms = len(true_means)
     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
     
@@ -134,6 +150,8 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
     print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
     
     for no_sim in tqdm(range(n_simulations)):
+        all_arm_counts = [0 for _ in range(n_arms)]
+
         if mode=='adaptive':
             algo = JamiesonJainAlgo(n_arms, mu_0, delta)
         elif mode=='uniform':
@@ -160,7 +178,11 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
                 break
             
             else:
-                observation = np.random.normal(loc=true_means[arm], scale=1.0)
+
+                observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
+                print(mode, "arm:", arm, " compte:", all_arm_counts[arm])
+                all_arm_counts[arm]+=1
+                
                 algo.update(arm, observation)
                 
                 nb_found = len(algo.S_t.intersection(true_positives))
@@ -209,9 +231,11 @@ if __name__ == "__main__":
     true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
     n_arms = len(true_means)
     
+    all_arm_data = prepare_experiment(true_means, horizon, n_sims)
+    
     # 1. Run Simulations
-    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', n_sims)
-    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', n_sims)
+    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, n_sims)
+    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, n_sims)
     
     # --- PLOT 1: TPR ---
     plt.figure(1, figsize=(10, 5))
@@ -221,7 +245,7 @@ if __name__ == "__main__":
     plt.title("Discovery speed (TPR)")
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure/figure1.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_reconstitutive/figure1.png", dpi=300, bbox_inches="tight")
 
 
     # --- PLOT 2: PULL EVOLUTION ---
@@ -250,7 +274,7 @@ if __name__ == "__main__":
     plt.ylabel("Number of pulls ($T_i(t)$)")
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure/figure2.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_reconstitutive/figure2.png", dpi=300, bbox_inches="tight")
 
 
     # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
@@ -282,4 +306,4 @@ if __name__ == "__main__":
     
     print("Displaying plots...")
     plt.tight_layout()
-    plt.savefig(git_root / "figure/figure3.png", dpi=300, bbox_inches="tight")
+    plt.savefig(git_root / "figure_reconstitutive/figure3.png", dpi=300, bbox_inches="tight")
