@@ -122,7 +122,7 @@ class UniformAlgo:
 
 def run_experiment(true_means, horizon, mode, n_simulations=20):
     n_arms = len(true_means)
-    all_data=[[] for i in range(n_arms)]
+    all_data_sim=[]
     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
     
     tpr_history_sum = np.zeros(horizon)
@@ -135,6 +135,8 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
     print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
     
     for no_sim in tqdm(range(n_simulations)):
+        all_data=[[] for i in range(n_arms)]
+
         if mode=='adaptive':
             algo = JamiesonJainAlgo(n_arms, mu_0, delta)
         elif mode=='uniform':
@@ -168,6 +170,7 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
                 nb_found = len(algo.S_t.intersection(true_positives))
                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
                 run_tpr.append(current_tpr)
+        all_data_sim.append(all_data)
 
         # TPR aggregation
         tpr_i = np.array(run_tpr)
@@ -183,7 +186,7 @@ def run_experiment(true_means, horizon, mode, n_simulations=20):
     tpr_history_mean = tpr_history_sum / n_simulations
     counts_history_mean = counts_evolution_sum / n_simulations
 
-    return tpr_history_mean, tpr_list, counts_history_mean, counts_list
+    return tpr_history_mean, tpr_list, counts_history_mean, counts_list, all_data_sim
 
 # -----------------------------------------------------------------------------
 # PART 3: CONFIGURATION AND EXECUTION
