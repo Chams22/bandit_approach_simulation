@@ -7,6 +7,18 @@ from tqdm import tqdm
 # -----------------------------------------------------------------------------
 class JamiesonJainAlgo:
     def __init__(self, n_arms, mu_0, delta):
+        """
+        Initializes the adaptive bandit algorithm.
+
+        Parameters
+        ----------
+        n_arms : int
+            The total number of arms (distributions) available.
+        mu_0 : float
+            The baseline threshold. We want to identify arms with mean > mu_0.
+        delta : float
+            The confidence level / False Discovery Rate (FDR) parameter (e.g., 0.05).
+        """
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
@@ -21,12 +33,44 @@ class JamiesonJainAlgo:
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
     def phi(self, t, delta_val):
+        """
+        Calculates the "Anytime" Confidence Interval width.
+
+        This function implements the specific bound based on the Law of the Iterated Logarithm 
+        cited in the paper (Kaufmann et al.), ensuring the interval is valid for all time steps.
+
+        Parameters
+        ----------
+        t : int
+            The number of times the specific arm has been pulled.
+        delta_val : float
+            The specific confidence level to use (which may vary during BH procedure).
+
+        Returns
+        -------
+        float
+            The width of the confidence interval. Returns infinity if t=0 to force exploration.
+        """
         if t == 0: return float('inf')
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
         return np.sqrt(num / t)
 
     def select_arm(self):
+        """
+        Determines which arm to pull next based on the UCB strategy.
+
+        Strategy:
+        1. If t < n, pull every arm once for initialization.
+        2. Identify candidate arms (those NOT yet in the discovery set S_t).
+        3. If no candidates remain, return "stop".
+        4. Otherwise, select the candidate with the highest Upper Confidence Bound (UCB).
+
+        Returns
+        -------
+        int or str
+            The index of the arm to pull, or "stop" if all arms are discovered.
+        """
         if self.time < self.n:
             return self.time
         
@@ -46,6 +90,22 @@ class JamiesonJainAlgo:
         return selected
 
     def update(self, arm_idx, observation):
+        """
+        Updates the algorithm's state with a new observation and runs the decision procedure.
+
+        Functionality:
+        1. Updates the empirical mean and pull count for the pulled arm.
+        2. Saves the current pull counts to history.
+        3. Runs the Benjamini-Hochberg (BH) procedure using "Anytime" p-values (via LCB)
+           to determine which arms can be added to the discovery set S_t.
+
+        Parameters
+        ----------
+        arm_idx : int
+            The index of the arm that was pulled.
+        observation : float
+            The reward/value observed from the arm.
+        """
         n = self.counts[arm_idx]
         self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + observation) / (n + 1)
         self.counts[arm_idx] += 1
@@ -69,6 +129,18 @@ class JamiesonJainAlgo:
 
 class UniformAlgo:
     def __init__(self, n_arms, mu_0, delta):
+        """
+        Initializes the Uniform (Round-Robin) sampling algorithm.
+        
+        Parameters
+        ----------
+        n_arms : int
+            The total number of arms.
+        mu_0 : float
+            The baseline threshold.
+        delta : float
+            The confidence parameter.
+        """
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
@@ -78,22 +150,66 @@ class UniformAlgo:
         self.time = 0
         self.S_t = set()
         
-        # History for visualization
-        # Initialized with zeros for t=0
+        # Historique pour visualisation
+        # On initialise avec des zéros pour t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
     def phi(self, t, delta_val):
+        """
+        Calculates the "Anytime" Confidence Interval width.
+        
+        Even for the uniform algorithm, we use the same statistical confidence bound 
+        to validate discoveries (Inference Rule).
+        
+        Parameters
+        ----------
+        t : int
+            Number of pulls.
+        delta_val : float
+            Confidence level.
+            
+        Returns
+        -------
+        float
+            Confidence interval width.
+        """
         if t == 0: return float('inf')
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
         return np.sqrt(num / t)
 
     def select_arm(self):
+        """
+        Selects the next arm using a Round-Robin strategy.
+        
+        Logic:
+        Simply rotates through arms 0, 1, 2, ..., n-1, 0, ...
+        
+        Returns
+        -------
+        int
+            The index of the arm to pull.
+        """
         if self.time < self.n:
             return self.time
         return self.time % self.n
 
     def update(self, arm_idx, observation):
+        """
+        Updates the state and checks for discoveries.
+        
+        Note:
+        Although the sampling is uniform (dumb), the update/inference rule is 
+        intelligent and identical to the adaptive algorithm (Benjamini-Hochberg 
+        with Anytime bounds) to ensure a fair comparison of False Discovery Rate control.
+        
+        Parameters
+        ----------
+        arm_idx : int
+            Index of the pulled arm.
+        observation : float
+            Observed reward.
+        """
         n = self.counts[arm_idx]
         self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + observation) / (n + 1)
         self.counts[arm_idx] += 1
@@ -121,6 +237,40 @@ class UniformAlgo:
 # -----------------------------------------------------------------------------
 
 def run_experiment(true_means, horizon, mode, n_simulations=20):
+    """
+    Runs Monte-Carlo simulations to evaluate the performance of the bandit algorithm.
+
+    This function executes `n_simulations` independent runs of the specified algorithm 
+    (adaptive or uniform) over a fixed time horizon. It tracks the True Positive Rate (TPR), 
+    the number of pulls for each arm, and the raw observations collected.
+
+    Parameters
+    ----------
+    true_means : array-like
+        The true expected values (means) of the reward distributions for each arm. 
+        Used to determine true positives (H1) where mean > mu_0.
+    horizon : int
+        The total budget or maximum number of time steps for the experiment.
+    mode : str
+        The sampling strategy to use: 'adaptive' (Jamieson & Jain) or 'uniform'.
+    n_simulations : int, optional
+        The number of independent Monte-Carlo simulations to run for averaging results 
+        (default is 20).
+
+    Returns
+    -------
+    tpr_history_mean : ndarray
+        The average True Positive Rate over time across all simulations.
+    tpr_list : list of ndarray
+        A list containing the TPR history for each individual simulation.
+    counts_history_mean : ndarray
+        The average number of pulls for each arm at each time step across all simulations.
+    counts_list : list of ndarray
+        A list containing the pull count history for each individual simulation.
+    all_data_sim : list of list
+        A nested list containing the raw observations (rewards) collected for each arm 
+        during each simulation. Structure: [simulation_index][arm_index] -> list of values.
+    """
     n_arms = len(true_means)
     all_data_sim=[]
     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
