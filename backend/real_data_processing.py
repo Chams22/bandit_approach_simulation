@@ -106,10 +106,9 @@ for name, df in datasets.items():
 
 # --- 4. COMMENT UTILISER LES DONNÉES ---
 # Exemple pour lancer votre run_experiment avec les données de PENN :
-
 data_penn = results['penn']['data']
 arm_penn = results['penn']['arm_names']
-def get_min_samples(all_arm_data):
+def get_min_max_samples(all_arm_data):
     """
     Renvoie la taille du bras qui a le moins de données.
     Utile pour fixer l'horizon max de la simulation sans 'out of bounds'.
@@ -120,12 +119,13 @@ def get_min_samples(all_arm_data):
     
     # On calcule la longueur de chaque bras et on prend le minimum
     min_len = min(len(arm_data) for arm_data in first_simulation)
-    
-    return min_len
+    max_len = max(len(arm_data) for arm_data in first_simulation)
+
+    return min_len, max_len
 
 # --- Utilisation ---
-min_len = get_min_samples(data_penn)
-print("taille min =", min_len)
+min_len, max_len = get_min_max_samples(data_penn)
+print("taille min =", min_len, "taille max =", max_len)
 
 
 # -----------------------------------------------------------------------------
@@ -153,8 +153,8 @@ if __name__ == "__main__":
     n_arms = len(arm_penn)
         
     # 1. Run Simulations
-    pnb_unif, _, counts_unif_mean, counts_unif_list = usable_adaptative_algorithm.run_experiment(arm_penn, mu_0, delta, horizon=1000, mode='uniform', all_arm_data=data_penn, n_simulations=n_sims)
-    pnb_adapt, _, counts_adapt_mean, counts_adapt_list = usable_adaptative_algorithm.run_experiment(arm_penn, mu_0, delta, horizon=1000, mode='adaptive', all_arm_data=data_penn, n_simulations=n_sims)
+    pnb_unif, _, counts_unif_mean, counts_unif_list = usable_adaptative_algorithm.run_experiment(arm_penn, mu_0, delta, horizon, mode='uniform', all_arm_data=data_penn, n_simulations=n_sims)
+    pnb_adapt, _, counts_adapt_mean, counts_adapt_list = usable_adaptative_algorithm.run_experiment(arm_penn, mu_0, delta, horizon, mode='adaptive', all_arm_data=data_penn, n_simulations=n_sims)
 
     
     # --- PLOT 1: pr ---
@@ -227,3 +227,6 @@ if __name__ == "__main__":
     print("Displaying plots...")
     plt.tight_layout()
     plt.savefig(git_root / "figure_real_data/figure3.png", dpi=300, bbox_inches="tight")
+
+
+# attention changer le controle !!!!!
