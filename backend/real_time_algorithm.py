@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from scipy.optimize import brentq
 
 # -----------------------------------------------------------------------------
 # PART 1: THE ALGORITHM
@@ -127,6 +128,40 @@ class JamiesonJainAlgo:
                 break
         self.S_t.update(current_St)
 
+    def get_anytime_pvalue(self, arm_idx):
+        """
+        Calcule la p-value anytime pour un bras donné.
+        Résout l'équation : emp_mean - phi(count, p) = mu_0
+        """
+        t = self.counts[arm_idx]
+        mean = self.emp_means[arm_idx]
+        
+        # 1. Si on n'a pas encore joué le bras, p-value = 1.0 (incertitude totale)
+        if t == 0:
+            return 1.0
+        
+        # 2. Si la moyenne est inférieure à mu_0, on ne peut pas rejeter H0 (on cherche des effets positifs)
+        # La p-value est donc 1.0 (ou très proche)
+        diff = mean - self.mu_0
+        if diff <= 0:
+            return 1.0
+
+        # 3. Fonction à résoudre : phi(t, p) - (mean - mu_0) = 0
+        # On cherche p tel que la largeur de l'intervalle soit égale à la distance à mu_0
+        def objective(p):
+            # Attention : p ne doit pas être 0 ou 1 pour éviter les erreurs de log
+            if p <= 0: return float('inf') 
+            if p >= 1: return -float('inf')
+            return self.phi(t, p) - diff
+
+        try:
+            # On cherche p entre une valeur très petite (ex: 1e-10) et 1.0
+            p_value = brentq(objective, 1e-12, 0.9999)
+            return p_value
+        except ValueError:
+            # Si brentq échoue (cas rares aux limites), on renvoie 1.0 par prudence
+            return 1.0
+
 class UniformAlgo:
     def __init__(self, n_arms, mu_0, delta):
         """
@@ -230,6 +265,40 @@ class UniformAlgo:
                 current_St = set(passing_arms)
                 break
         self.S_t.update(current_St)
+    
+    def get_anytime_pvalue(self, arm_idx):
+        """
+        Calcule la p-value anytime pour un bras donné.
+        Résout l'équation : emp_mean - phi(count, p) = mu_0
+        """
+        t = self.counts[arm_idx]
+        mean = self.emp_means[arm_idx]
+        
+        # 1. Si on n'a pas encore joué le bras, p-value = 1.0 (incertitude totale)
+        if t == 0:
+            return 1.0
+        
+        # 2. Si la moyenne est inférieure à mu_0, on ne peut pas rejeter H0 (on cherche des effets positifs)
+        # La p-value est donc 1.0 (ou très proche)
+        diff = mean - self.mu_0
+        if diff <= 0:
+            return 1.0
+
+        # 3. Fonction à résoudre : phi(t, p) - (mean - mu_0) = 0
+        # On cherche p tel que la largeur de l'intervalle soit égale à la distance à mu_0
+        def objective(p):
+            # Attention : p ne doit pas être 0 ou 1 pour éviter les erreurs de log
+            if p <= 0: return float('inf') 
+            if p >= 1: return -float('inf')
+            return self.phi(t, p) - diff
+
+        try:
+            # On cherche p entre une valeur très petite (ex: 1e-10) et 1.0
+            p_value = brentq(objective, 1e-12, 0.9999)
+            return p_value
+        except ValueError:
+            # Si brentq échoue (cas rares aux limites), on renvoie 1.0 par prudence
+            return 1.0
 
 
 # -----------------------------------------------------------------------------

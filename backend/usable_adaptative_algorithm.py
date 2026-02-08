@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from scipy.optimize import brentq
 
@@ -341,7 +340,7 @@ def prepare_experiment(true_means, horizon, n_sims):
         all_arm_data_by_sim.append(all_arm_data)
     return all_arm_data_by_sim
         
-def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations):
     """
     Runs the bandit experiment using pre-generated data for consistency.
 
@@ -368,20 +367,19 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
 
     Returns
     -------
-    tpr_history_mean : ndarray
+    pnb_history_mean : ndarray
         Average True Positive Rate over time.
-    tpr_list : list
-        History of TPR for each individual simulation.
+    pnb_list : list
+        History of pr for each individual simulation.
     counts_history_mean : ndarray
         Average pull counts per arm over time.
     counts_list : list
         History of pull counts for each individual simulation.
     """
-    n_arms = len(true_means)
-    true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
+    n_arms = len(arms)
     
-    tpr_history_sum = np.zeros(horizon)
-    tpr_list = []
+    pnb_history_sum = np.zeros(horizon)
+    pnb_list = []
     
     # Store the AVERAGE number of pulls at each time t
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
@@ -401,7 +399,7 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
         else:
             raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
         
-        run_tpr = []
+        run_pr = []
         
         for t in range(horizon):
             arm = algo.select_arm()
@@ -409,9 +407,9 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
             if arm == "stop":
                 # If we stop before the end, we fill the lists with the last value
                 # so that arrays have the correct size (horizon)
-                last_tpr = run_tpr[-1] if run_tpr else 1.0
-                remaining_steps = horizon - len(run_tpr)
-                run_tpr.extend([last_tpr] * remaining_steps)
+                last_pr = run_pr[-1] if run_pr else 1.0
+                remaining_steps = horizon - len(run_pr)
+                run_pr.extend([last_pr] * remaining_steps)
                 
                 # For counts, repeat the last known row until the end
                 last_counts = algo.counts_evolution[-1]
@@ -430,14 +428,14 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
                 
                 algo.update(arm, observation)
                 
-                nb_found = len(algo.S_t.intersection(true_positives))
-                current_tpr = nb_found / len(true_positives) if true_positives else 1.0
-                run_tpr.append(current_tpr)
+                nb_found = len(algo.S_t)
+                current_pr = nb_found
+                run_pr.append(current_pr)
 
-        # TPR aggregation
-        tpr_i = np.array(run_tpr)
-        tpr_list.append(tpr_i)
-        tpr_history_sum += tpr_i
+        # pr aggregation
+        pnb_i = np.array(run_pr)
+        pnb_list.append(pnb_i)
+        pnb_history_sum += pnb_i
         
         # Counts aggregation (ensure we take the first 'horizon+1' elements)
         # (horizon + 1 because there is the initial state at t=0)
@@ -445,110 +443,8 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
         counts_list.append(counts_arr)
         counts_evolution_sum += counts_arr
 
-    tpr_history_mean = tpr_history_sum / n_simulations
+    pnb_history_mean = pnb_history_sum / n_simulations
     counts_history_mean = counts_evolution_sum / n_simulations
 
-    return tpr_history_mean, tpr_list, counts_history_mean, counts_list
+    return pnb_history_mean, pnb_list, counts_history_mean, counts_list
 
-# -----------------------------------------------------------------------------
-# PART 3: CONFIGURATION AND EXECUTION
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    from pathlib import Path
-
-    def find_git_root(start: Path | None = None) -> Path:
-        p = (start or Path(__file__)).resolve()
-        for parent in [p, *p.parents]:
-            git_entry = parent / ".git"
-            if git_entry.is_dir() or git_entry.is_file():  # support worktree (.git file)
-                return parent
-        raise RuntimeError("Git root not found (no .git in parents)")
-
-    git_root = find_git_root()
-    plt.close('all')
-    
-    # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
-    mu_0 = 0.0
-    delta = 0.05
-    horizon = 800
-    n_sims = 20
-    
-    true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
-    n_arms = len(true_means)
-    
-    all_arm_data = prepare_experiment(true_means, horizon, n_sims)
-    
-    # 1. Run Simulations
-    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, n_sims)
-    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, n_sims)
-    
-    # --- PLOT 1: TPR ---
-    plt.figure(1, figsize=(10, 5))
-    plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-    plt.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--')
-    plt.axhline(y=1.0, color='gray', linestyle=':')
-    plt.title("Discovery speed (TPR)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure_reconstitutive/figure1.png", dpi=300, bbox_inches="tight")
-
-
-    # --- PLOT 2: PULL EVOLUTION ---
-    plt.figure(2, figsize=(12, 6))
-    
-    # Subplot 1: Uniform
-    plt.subplot(1, 2, 1)
-    plt.title("Uniform: Number of pulls per arm")
-    for arm_idx in range(n_arms):
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
-        plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 2: Adaptive
-    plt.subplot(1, 2, 2)
-    plt.title("Adaptive: Number of pulls per arm")
-    for arm_idx in range(n_arms):
-        linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
-        plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
-        
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure_reconstitutive/figure2.png", dpi=300, bbox_inches="tight")
-
-
-    # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
-    plt.figure(3, figsize=(14, 6))
-    plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
-    
-    for arm_idx in range(n_arms):
-        color = f'C{arm_idx}' 
-        linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
-        
-        for sim_counts in counts_adapt_list:
-            plt.plot(sim_counts[:, arm_idx], 
-                     color=color, 
-                     alpha=0.15,
-                     linewidth=0.8,
-                     linestyle=linestyle)
-
-        plt.plot(counts_adapt_mean[:, arm_idx], 
-                 label=label, 
-                 color=color, 
-                 linewidth=2.5,
-                 linestyle=linestyle)
-        
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend(loc='upper left')
-    plt.grid(True, alpha=0.3)
-    
-    print("Displaying plots...")
-    plt.tight_layout()
-    plt.savefig(git_root / "figure_reconstitutive/figure3.png", dpi=300, bbox_inches="tight")
