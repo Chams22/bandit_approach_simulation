@@ -305,7 +305,7 @@ class UniformAlgo:
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 
-def run_experiment(true_means, horizon, mode, n_simulations=20):
+def run_experiment(true_means, horizon, mode, n_simulations=20): #attention mettre seed pour stabiliser
     """
     Runs Monte-Carlo simulations to evaluate the performance of the bandit algorithm.
 

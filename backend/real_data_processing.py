@@ -17,22 +17,22 @@ path_penn = os.path.join(root_dir, 'data', 'processed', 'penn.csv')
 path_walmart = os.path.join(root_dir, 'data', 'processed', 'walmart.csv')
 
 # Lecture des fichiers
-df_effort = pd.read_csv(path_effort)
+df_effort0 = pd.read_csv(path_effort)
 # Petite sécurité : renommage si nécessaire pour effort (souvent 'workerId' ou 'mturk_id')
-if 'workerId' in df_effort.columns: df_effort = df_effort.rename(columns={'workerId': 'id'})
-elif 'participant_id' in df_effort.columns: df_effort = df_effort.rename(columns={'participant_id': 'id'})
+if 'workerId' in df_effort0.columns: df_effort = df_effort0.rename(columns={'workerId': 'id'})
+elif 'participant_id' in df_effort0.columns: df_effort = df_effort0.rename(columns={'participant_id': 'id'})
 
-df_exercise = pd.read_csv(path_exercise).rename(columns={'participant_id': 'id'})
-df_penn = pd.read_csv(path_penn).rename(columns={'participant_id': 'id'})
-df_walmart = pd.read_csv(path_walmart).rename(columns={'participant_id': 'id'})
+df_exercise0 = pd.read_csv(path_exercise).rename(columns={'participant_id': 'id'})
+df_penn0 = pd.read_csv(path_penn).rename(columns={'participant_id': 'id'})
+df_walmart0 = pd.read_csv(path_walmart).rename(columns={'participant_id': 'id'})
 
 print("Fichiers chargés avec succès !")
 
 # Filtrage des colonnes utiles
-df_effort = df_effort[['id', 'y', 'arm']]
-df_exercise = df_exercise[['id', 'y', 'arm']]
-df_penn = df_penn[['id', 'y', 'arm']]
-df_walmart = df_walmart[['id', 'y', 'arm']]
+df_effort = df_effort0[['id', 'y', 'arm']]
+df_exercise = df_exercise0[['id', 'y', 'arm']]
+df_penn = df_penn0[['id', 'y', 'arm']]
+df_walmart = df_walmart0[['id', 'y', 'arm']]
 
 # --- 2. NOUVELLE FONCTION DE PRÉPARATION ---
 
