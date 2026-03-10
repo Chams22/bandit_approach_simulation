@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from scipy.optimize import brentq
+np.random.seed(1234)
 
 # -----------------------------------------------------------------------------
 # PART 1: THE ALGORITHM
