@@ -36,25 +36,34 @@ class JamiesonJainAlgo:
     def phi(self, t, delta_val):
         """
         Calculates the "Anytime" Confidence Interval width.
-
-        This function implements the specific bound based on the Law of the Iterated Logarithm 
-        cited in the paper (Kaufmann et al.), ensuring the interval is valid for all time steps.
+        
+        This bound is based on the Law of the Iterated Logarithm (LIL), 
+        ensuring the confidence interval remains valid at all time steps.
 
         Parameters
         ----------
         t : int
-            The number of times the specific arm has been pulled.
+            Number of times the specific arm has been pulled.
         delta_val : float
-            The specific confidence level to use (which may vary during BH procedure).
+            The confidence level (or p-value during BH procedure).
 
         Returns
         -------
         float
-            The width of the confidence interval. Returns infinity if t=0 to force exploration.
+            The width of the confidence interval.
         """
-        if t == 0: return float('inf')
+        if t == 0: 
+            return float('inf')
+        
+        # Calculate the numerator based on the LIL concentration inequality
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
+              
+        # SAFETY FIX: Prevent the numerator from becoming negative.
+        # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
+        # as the logarithmic terms can result in a negative sum.
+        num = max(0.0, num)
+        
         return np.sqrt(num / t)
 
     def select_arm(self):
@@ -90,7 +99,7 @@ class JamiesonJainAlgo:
                 selected = i
         return selected
 
-    def update(self, arm_idx, observation):
+    def bh_update(self, arm_idx, observation):
         """
         Updates the algorithm's state with a new observation and runs the decision procedure.
 
@@ -128,38 +137,97 @@ class JamiesonJainAlgo:
                 break
         self.S_t.update(current_St)
 
+    def bh_update_optimized(self, arm_idx, observation):
+        """
+        Updates the algorithm's state with a new observation and runs the decision procedure.
+        
+        Optimized version: Uses sorted anytime p-values to run the Benjamini-Hochberg
+        procedure in O(n log n) time instead of O(n^2).
+        
+        Parameters
+        ----------
+        arm_idx : int
+            The index of the arm that was pulled.
+        observation : float
+            The reward/value observed from the arm.
+        """
+        # 1. Mise à jour des statistiques du bras tiré
+        n_pulls = self.counts[arm_idx]
+        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy()) 
+        
+        # 2. Calcul des p-values anytime pour tous les bras
+        # On stocke des tuples : (p_value, index_du_bras)
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        
+        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
+        p_values_with_idx.sort(key=lambda x: x[0])
+        
+        # 4. Procédure de Benjamini-Hochberg classique
+        # On cherche le plus grand k tel que p_(k) <= delta * k / n
+        current_St = set()
+        
+        for k in range(self.n, 0, -1):
+            # Attention : les listes Python commencent à l'index 0
+            # Le k-ième élément est donc à l'index k - 1
+            p_val_k = p_values_with_idx[k - 1][0]
+            effective_delta = self.delta * k / self.n
+            
+            # Dès qu'on trouve le plus grand k qui valide la condition
+            if p_val_k <= effective_delta:
+                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
+                for rank in range(k):
+                    discovered_arm_idx = p_values_with_idx[rank][1]
+                    current_St.add(discovered_arm_idx)
+                break # On a trouvé le max k, on arrête la boucle
+                
+        # 5. Mise à jour de l'ensemble global des découvertes
+        self.S_t.update(current_St)
+
     def get_anytime_pvalue(self, arm_idx):
         """
-        Calcule la p-value anytime pour un bras donné.
-        Résout l'équation : emp_mean - phi(count, p) = mu_0
+        Calculates the anytime p-value for a given arm.
+        Solves the equation: emp_mean - phi(count, p) = mu_0
+
+        Parameters
+        ----------
+        arm_idx : int
+            The index of the arm for which to calculate the p-value.
+
+        Returns
+        -------
+        float
+            The calculated anytime p-value.
         """
         t = self.counts[arm_idx]
         mean = self.emp_means[arm_idx]
         
-        # 1. Si on n'a pas encore joué le bras, p-value = 1.0 (incertitude totale)
+        # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
             return 1.0
         
-        # 2. Si la moyenne est inférieure à mu_0, on ne peut pas rejeter H0 (on cherche des effets positifs)
-        # La p-value est donc 1.0 (ou très proche)
+        # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
+        # The p-value is therefore 1.0
         diff = mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Fonction à résoudre : phi(t, p) - (mean - mu_0) = 0
-        # On cherche p tel que la largeur de l'intervalle soit égale à la distance à mu_0
+        # 3. Function to solve: phi(t, p) - (mean - mu_0) = 0
+        # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
-            # Attention : p ne doit pas être 0 ou 1 pour éviter les erreurs de log
+            # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
             return self.phi(t, p) - diff
 
         try:
-            # On cherche p entre une valeur très petite (ex: 1e-10) et 1.0
+            # Search for p between a very small value (e.g., 1e-12) and 0.9999
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # Si brentq échoue (cas rares aux limites), on renvoie 1.0 par prudence
+            # If brentq fails (rare edge cases), return 1.0 as a precaution
             return 1.0
 
 class UniformAlgo:
@@ -193,43 +261,99 @@ class UniformAlgo:
         """
         Calculates the "Anytime" Confidence Interval width.
         
-        Even for the uniform algorithm, we use the same statistical confidence bound 
-        to validate discoveries (Inference Rule).
-        
+        This bound is based on the Law of the Iterated Logarithm (LIL), 
+        ensuring the confidence interval remains valid at all time steps.
+
         Parameters
         ----------
         t : int
-            Number of pulls.
+            Number of times the specific arm has been pulled.
         delta_val : float
-            Confidence level.
-            
+            The confidence level (or p-value during BH procedure).
+
         Returns
         -------
         float
-            Confidence interval width.
+            The width of the confidence interval.
         """
-        if t == 0: return float('inf')
+        if t == 0: 
+            return float('inf')
+        
+        # Calculate the numerator based on the LIL concentration inequality
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
+              
+        # SAFETY FIX: Prevent the numerator from becoming negative.
+        # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
+        # as the logarithmic terms can result in a negative sum.
+        num = max(0.0, num)
+        
         return np.sqrt(num / t)
 
     def select_arm(self):
+            """
+            Selects the next arm uniformly at random.
+            
+            This avoids periodic sampling biases (unlike deterministic Round-Robin)
+            and simulates a standard randomized controlled trial.
+            
+            Returns
+            -------
+            int
+                The index of the arm to pull.
+            """
+            return np.random.randint(self.n)
+    
+    def bh_update_optimized(self, arm_idx, observation):
         """
-        Selects the next arm using a Round-Robin strategy.
+        Updates the algorithm's state with a new observation and runs the decision procedure.
         
-        Logic:
-        Simply rotates through arms 0, 1, 2, ..., n-1, 0, ...
+        Optimized version: Uses sorted anytime p-values to run the Benjamini-Hochberg
+        procedure in O(n log n) time instead of O(n^2).
         
-        Returns
-        -------
-        int
-            The index of the arm to pull.
+        Parameters
+        ----------
+        arm_idx : int
+            The index of the arm that was pulled.
+        observation : float
+            The reward/value observed from the arm.
         """
-        if self.time < self.n:
-            return self.time
-        return self.time % self.n
+        # 1. Mise à jour des statistiques du bras tiré
+        n_pulls = self.counts[arm_idx]
+        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy()) 
+        
+        # 2. Calcul des p-values anytime pour tous les bras
+        # On stocke des tuples : (p_value, index_du_bras)
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        
+        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
+        p_values_with_idx.sort(key=lambda x: x[0])
+        
+        # 4. Procédure de Benjamini-Hochberg classique
+        # On cherche le plus grand k tel que p_(k) <= delta * k / n
+        current_St = set()
+        
+        for k in range(self.n, 0, -1):
+            # Attention : les listes Python commencent à l'index 0
+            # Le k-ième élément est donc à l'index k - 1
+            p_val_k = p_values_with_idx[k - 1][0]
+            effective_delta = self.delta * k / self.n
+            
+            # Dès qu'on trouve le plus grand k qui valide la condition
+            if p_val_k <= effective_delta:
+                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
+                for rank in range(k):
+                    discovered_arm_idx = p_values_with_idx[rank][1]
+                    current_St.add(discovered_arm_idx)
+                break # On a trouvé le max k, on arrête la boucle
+                
+        # 5. Mise à jour de l'ensemble global des découvertes
+        self.S_t.update(current_St)
 
-    def update(self, arm_idx, observation):
+    def bh_update(self, arm_idx, observation):
         """
         Updates the state and checks for discoveries.
         
@@ -265,40 +389,51 @@ class UniformAlgo:
                 current_St = set(passing_arms)
                 break
         self.S_t.update(current_St)
-    
+
     def get_anytime_pvalue(self, arm_idx):
         """
-        Calcule la p-value anytime pour un bras donné.
-        Résout l'équation : emp_mean - phi(count, p) = mu_0
+        Calculates the anytime p-value for a given arm.
+        Solves the equation: emp_mean - phi(count, p) = mu_0
+
+        Parameters
+        ----------
+        arm_idx : int
+            The index of the arm for which to calculate the p-value.
+
+        Returns
+        -------
+        float
+            The calculated anytime p-value.
         """
         t = self.counts[arm_idx]
         mean = self.emp_means[arm_idx]
         
-        # 1. Si on n'a pas encore joué le bras, p-value = 1.0 (incertitude totale)
+        # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
             return 1.0
         
-        # 2. Si la moyenne est inférieure à mu_0, on ne peut pas rejeter H0 (on cherche des effets positifs)
-        # La p-value est donc 1.0 (ou très proche)
+        # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
+        # The p-value is therefore 1.0
         diff = mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Fonction à résoudre : phi(t, p) - (mean - mu_0) = 0
-        # On cherche p tel que la largeur de l'intervalle soit égale à la distance à mu_0
+        # 3. Function to solve: phi(t, p) - (mean - mu_0) = 0
+        # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
-            # Attention : p ne doit pas être 0 ou 1 pour éviter les erreurs de log
+            # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
             return self.phi(t, p) - diff
 
         try:
-            # On cherche p entre une valeur très petite (ex: 1e-10) et 1.0
+            # Search for p between a very small value (e.g., 1e-12) and 0.9999
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # Si brentq échoue (cas rares aux limites), on renvoie 1.0 par prudence
+            # If brentq fails (rare edge cases), return 1.0 as a precaution
             return 1.0
+
 
 
 # -----------------------------------------------------------------------------
@@ -384,7 +519,8 @@ def run_experiment(true_means, horizon, mode, n_simulations=20): #attention mett
             else:
                 observation = np.random.normal(loc=true_means[arm], scale=1.0)
                 all_data[arm].append(observation)
-                algo.update(arm, observation)
+                #algo.bh_update(arm, observation)
+                algo.bh_update_optimized(arm, observation)
                 
                 nb_found = len(algo.S_t.intersection(true_positives))
                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
