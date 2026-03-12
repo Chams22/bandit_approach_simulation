@@ -439,7 +439,7 @@ class UniformAlgo:
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 
-def prepare_experiment(true_means, horizon, n_sims):
+def prepare_experiment(true_means, horizon, n_sims, scale=1.0):
     """
     Pre-generates all random observations for the experiment to ensure consistency.
 
@@ -468,7 +468,7 @@ def prepare_experiment(true_means, horizon, n_sims):
         for arm in range(n_arms):
             result_arm=[]
             for t in range(horizon):
-                observation = np.random.normal(loc=true_means[arm], scale=1.0) # set the seed?
+                observation = np.random.normal(loc=true_means[arm], scale=scale) # set the seed?
                 result_arm.append(observation)
             all_arm_data.append(result_arm)
         all_arm_data_by_sim.append(all_arm_data)
@@ -685,3 +685,33 @@ if __name__ == "__main__":
             print("Displaying plots...")
             plt.savefig(save_dir / f"spaghetti_sims_{sims}.png")
             plt.close()
+            
+            
+# parameters
+delta_base = 0.05
+n_sims = 100
+horizon = 800
+
+# different scenarios
+configs = [
+    {"name": "Delta_Sigma1",   "delta": delta_base,      "sigma": 1.0},
+    {"name": "DeltaSur4_Sigma1", "delta": delta_base / 4, "sigma": 1.0},
+    {"name": "Delta_Sigma2",   "delta": delta_base,      "sigma": 1.414}, # sqrt(2) bc N(mu, 2)
+    {"name": "DeltaSur4_Sigma2", "delta": delta_base / 4, "sigma": 1.414}
+]
+
+for conf in configs:
+    print(f"Test en cours : {conf['name']}")
+    
+    # On ajuste les moyennes selon le delta du scénario
+    # Exemple : 2 bras à 0.5 + delta, les autres à 0.5
+    current_means = np.array([0.5 + conf['delta'], 0.5 + conf['delta'], 0.5, 0.5, 0.0, 0.0])
+    
+    # On passe la 'scale' (sigma) à la préparation
+    all_arm_data = prepare_experiment(current_means, horizon, n_sims, scale=conf['sigma'])
+    
+    # Lancement des algos (ils utiliseront les data déjà bruitées)
+    # ... ton code run_experiment ...
+    
+    # Sauvegarde avec le nom du scénario
+    # plt.savefig(save_dir / f"tpr_{conf['name']}.png")
