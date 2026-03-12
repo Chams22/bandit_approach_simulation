@@ -60,7 +60,6 @@ class JamiesonJainAlgo:
         # Calculate the numerator based on the LIL concentration inequality
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
-              
         # SAFETY FIX: Prevent the numerator from becoming negative.
         # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
         # as the logarithmic terms can result in a negative sum.
@@ -284,7 +283,6 @@ class UniformAlgo:
         # Calculate the numerator based on the LIL concentration inequality
         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
               3 * np.log(np.log(np.e * t / 2) + 1e-10)
-              
         # SAFETY FIX: Prevent the numerator from becoming negative.
         # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
         # as the logarithmic terms can result in a negative sum.
@@ -551,7 +549,7 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
                 # For counts, repeat the last known row until the end
                 last_counts = algo.counts_evolution[-1]
                 for _ in range(remaining_steps):
-                     algo.counts_evolution.append(last_counts.copy())
+                    algo.counts_evolution.append(last_counts.copy())
                 break
             
             else:
@@ -593,100 +591,97 @@ from pathlib import Path
 from typing import Optional
 
 def find_git_root(start: Optional[Path] = None) -> Path:
-    p = (start or Path(__file__)).resolve()
+    p = (start or Path(__file__ if "__file__" in locals() else Path.cwd())).resolve()
     for parent in [p, *p.parents]:
         git_entry = parent / ".git"
         if git_entry.is_dir() or git_entry.is_file():
             return parent
-    raise RuntimeError("Git root not found (no .git in parents)")
+    return p  # Retourne le dossier actuel si .git n'est pas trouvé
 
 if __name__ == "__main__":
     git_root = find_git_root()
-    plt.close('all')
-    print(f"Racine Git trouvée : {git_root}")
-    
-    # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
+    save_dir = git_root / "figure_reconstitutive"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Liste de vos scénarios (on fait varier n_sims ici)
+    scenarios = [1000, 100, 20]
     mu_0 = 0.0
     delta = 0.05
     horizon = 800
-    n_sims = 1000
-    
-    true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
-    n_arms = len(true_means)
-    
-    all_arm_data = prepare_experiment(true_means, horizon, n_sims)
-    
-    # 1. Run Simulations
-    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, n_sims)
-    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, n_sims)
-    
-    # --- PLOT 1: TPR ---
-    plt.figure(1, figsize=(10, 5))
-    plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-    plt.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--')
-    plt.axhline(y=1.0, color='gray', linestyle=':')
-    plt.title("Discovery speed (TPR)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure_reconstitutive/figure1.png", dpi=300, bbox_inches="tight")
-
-
-    # --- PLOT 2: PULL EVOLUTION ---
-    plt.figure(2, figsize=(12, 6))
-    
-    # Subplot 1: Uniform
-    plt.subplot(1, 2, 1)
-    plt.title("Uniform: Number of pulls per arm")
-    for arm_idx in range(n_arms):
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
-        plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Subplot 2: Adaptive
-    plt.subplot(1, 2, 2)
-    plt.title("Adaptive: Number of pulls per arm")
-    for arm_idx in range(n_arms):
-        linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
-        plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+    for sims in scenarios:
+        print(f"Running scenario with n_sims = {sims}...")
         
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(git_root / "figure_reconstitutive/figure2.png", dpi=300, bbox_inches="tight")
-
-
-    # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
-    plt.figure(3, figsize=(14, 6))
-    plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
-    
-    for arm_idx in range(n_arms):
-        color = f'C{arm_idx}' 
-        linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
-        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+        # 1. Préparation et Simulation
+        true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
+        n_arms = len(true_means)
+        horizon = 800
+        mu_0 = 0.0
         
-        for sim_counts in counts_adapt_list:
-            plt.plot(sim_counts[:, arm_idx], 
-                     color=color, 
-                     alpha=0.15,
-                     linewidth=0.8,
-                     linestyle=linestyle)
+        all_arm_data = prepare_experiment(true_means, horizon, sims)
+        tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, sims)
+        tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, sims)
 
-        plt.plot(counts_adapt_mean[:, arm_idx], 
-                 label=label, 
-                 color=color, 
-                 linewidth=2.5,
-                 linestyle=linestyle)
+        # --- PLOT 1: TPR ---
+        plt.figure(figsize=(10, 5)) # Pas de numéro fixe pour éviter les conflits
+        plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+        plt.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--')
+        plt.title(f"Discovery speed (TPR) - n_sims: {sims}")
+        plt.legend()
+        # On ajoute {sims} dans le nom du fichier
+        plt.savefig(save_dir / f"tpr_sims_{sims}.png")
+        plt.close() # TRÈS IMPORTANT : ferme la figure pour libérer la mémoire
+
+        # --- PLOT 2: PULLS ---
         
-    plt.xlabel("Time (t)")
-    plt.ylabel("Number of pulls ($T_i(t)$)")
-    plt.legend(loc='upper left')
-    plt.grid(True, alpha=0.3)
-    
-    print("Displaying plots...")
-    plt.tight_layout()
-    plt.savefig(git_root / "figure_reconstitutive/figure3.png", dpi=300, bbox_inches="tight")
+        plt.figure(figsize=(12, 6))
+            # Subplot 1: Uniform
+        plt.subplot(1, 2, 1)
+        plt.title("Uniform: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+            plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 2: Adaptive
+        plt.subplot(1, 2, 2)
+        plt.title("Adaptive: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
+            label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+            plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+            
+            plt.savefig(save_dir / f"pulls_sims_{sims}.png")
+            plt.close()
+
+        # --- PLOT 3: SPAGHETTI ---
+        plt.figure(3, figsize=(14, 6))
+        plt.title(f"Adaptive: Number of pulls per arm ({sims} simulations)")
+        for arm_idx in range(n_arms):
+            color = f'C{arm_idx}' 
+            linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
+            label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+                
+            for sim_counts in counts_adapt_list:
+                plt.plot(sim_counts[:, arm_idx], 
+                    color=color, 
+                    alpha=0.15,
+                    linewidth=0.8,
+                    linestyle=linestyle)
+
+                plt.plot(counts_adapt_mean[:, arm_idx], 
+                    label=label, 
+                    color=color, 
+                    linewidth=2.5,
+                    linestyle=linestyle)
+                
+            plt.xlabel("Time (t)")
+            plt.ylabel("Number of pulls ($T_i(t)$)")
+            plt.legend(loc='upper left')
+            plt.grid(True, alpha=0.3)
+            
+            print("Displaying plots...")
+            plt.savefig(save_dir / f"spaghetti_sims_{sims}.png")
+            plt.close()
