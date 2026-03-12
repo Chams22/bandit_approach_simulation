@@ -438,8 +438,11 @@ class UniformAlgo:
 # -----------------------------------------------------------------------------
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
+mu_0 = 0.0
+delta = 0.05 
+horizon = 800
 
-def prepare_experiment(true_means, horizon, n_sims, scale=1.0):
+def prepare_experiment(true_means, horizon, n_sims, scale):
     """
     Pre-generates all random observations for the experiment to ensure consistency.
 
@@ -474,7 +477,7 @@ def prepare_experiment(true_means, horizon, n_sims, scale=1.0):
         all_arm_data_by_sim.append(all_arm_data)
     return all_arm_data_by_sim
         
-def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
+def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20, mu_0=0.0):
     """
     Runs the bandit experiment using pre-generated data for consistency.
 
@@ -587,7 +590,7 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
 # -----------------------------------------------------------------------------
 # PART 3: CONFIGURATION AND EXECUTION
 # -----------------------------------------------------------------------------
-from pathlib import Path
+""" from pathlib import Path
 from typing import Optional
 
 def find_git_root(start: Optional[Path] = None) -> Path:
@@ -605,6 +608,7 @@ if __name__ == "__main__":
 
     # Liste de vos scénarios (on fait varier n_sims ici)
     scenarios = [1000, 100, 20]
+    scale=0.1
     mu_0 = 0.0
     delta = 0.05
     horizon = 800
@@ -617,7 +621,7 @@ if __name__ == "__main__":
         horizon = 800
         mu_0 = 0.0
         
-        all_arm_data = prepare_experiment(true_means, horizon, sims)
+        all_arm_data = prepare_experiment(true_means, horizon, sims, scale)
         tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, sims)
         tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, sims)
 
@@ -700,18 +704,218 @@ configs = [
     {"name": "DeltaSur4_Sigma2", "delta": delta_base / 4, "sigma": 1.414}
 ]
 
+
+# Dossier de sauvegarde
+git_root = find_git_root()
+save_dir = git_root / "figure_reconstitutive" / "task_normal_params"
+save_dir.mkdir(parents=True, exist_ok=True)
+
+
 for conf in configs:
-    print(f"Test en cours : {conf['name']}")
+    print(f"\n>>> Test en cours : {conf['name']} (Delta={conf['delta']:.4f}, Sigma={conf['sigma']:.3f})")
     
-    # On ajuste les moyennes selon le delta du scénario
-    # Exemple : 2 bras à 0.5 + delta, les autres à 0.5
+    # 1. Ajustement des moyennes (Signal)
+    # On définit 2 bras "top" (0.5 + delta), 2 bras "moyens" (0.5), et 2 bras "nuls" (0.0)
     current_means = np.array([0.5 + conf['delta'], 0.5 + conf['delta'], 0.5, 0.5, 0.0, 0.0])
+    n_arms = len(current_means)
     
-    # On passe la 'scale' (sigma) à la préparation
+    # 2. Préparation des données (Bruit)
+    # On passe bien la 'scale' ici pour simuler la variance de la loi normale
     all_arm_data = prepare_experiment(current_means, horizon, n_sims, scale=conf['sigma'])
     
-    # Lancement des algos (ils utiliseront les data déjà bruitées)
-    # ... ton code run_experiment ...
+    # 3. Exécution des simulations
+    tpr_unif, _, counts_unif_mean, _ = run_experiment(current_means, horizon, 'uniform', all_arm_data, n_sims)
+    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(current_means, horizon, 'adaptive', all_arm_data, n_sims)
     
-    # Sauvegarde avec le nom du scénario
-    # plt.savefig(save_dir / f"tpr_{conf['name']}.png")
+    # --- GRAPHIQUE 1 : TPR (Vitesse de découverte) ---
+    plt.figure(figsize=(10, 5))
+    plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+    plt.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--')
+    plt.axhline(y=1.0, color='gray', linestyle=':')
+    plt.title(f"TPR - Scénario: {conf['name']}")
+    plt.xlabel("Temps")
+    plt.ylabel("Taux de Vrais Positifs")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(save_dir / f"tpr_{conf['name']}.png")
+    plt.close()
+
+    # --- GRAPHIQUE 2 : PULLS (Répartition des tirages) ---
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.title(f"Uniform ({conf['name']})")
+    for i in range(n_arms):
+        plt.plot(counts_unif_mean[:, i], label=f"Arm {i} (μ={current_means[i]:.3f})")
+    
+    plt.subplot(1, 2, 2)
+    plt.title(f"Adaptive ({conf['name']})")
+    for i in range(n_arms):
+        linestyle = '-' if current_means[i] > mu_0 else '--'
+        plt.plot(counts_adapt_mean[:, i], label=f"Arm {i}", linestyle=linestyle)
+    
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(save_dir / f"pulls_{conf['name']}.png")
+    plt.close()
+
+print(f"\n Les fichiers sont dans : {save_dir}")
+ """
+#-------------------------------------------------------------------------------------------
+# task 1 et 2
+#-------------------------------------------------------------------------------------------
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import Optional
+
+def find_git_root(start: Optional[Path] = None) -> Path:
+    p = (start or Path(__file__ if "__file__" in locals() else Path.cwd())).resolve()
+    for parent in [p, *p.parents]:
+        git_entry = parent / ".git"
+        if git_entry.is_dir() or git_entry.is_file():
+            return parent
+    return p 
+
+def run_task_1():
+    print("Exécution de la Tâche 1...")
+    git_root = find_git_root()
+    save_dir = git_root / "figure_reconstitutive"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    scenarios = [1000, 100, 20]
+    scale = 0.1
+    mu_0 = 0.0
+    delta = 0.05
+    horizon = 800
+
+    for sims in scenarios:
+        print(f"Running scenario with n_sims = {sims}...")
+        true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
+        n_arms = len(true_means)
+        
+        all_arm_data = prepare_experiment(true_means, horizon, sims, scale)
+        tpr_unif, _, counts_unif_mean, _ = run_experiment(true_means, horizon, 'uniform', all_arm_data, sims)
+        tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, sims)
+
+        # --- PLOT 1: TPR ---
+        plt.figure(figsize=(10, 5))
+        plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+        plt.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--')
+        plt.title(f"TPR - n_sims: {sims}")
+        plt.legend()
+        plt.savefig(save_dir / f"tpr_sims_{sims}.png")
+        plt.close()
+
+        # --- PLOT 2: PULLS ---
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        for arm_idx in range(n_arms):
+            plt.plot(counts_unif_mean[:, arm_idx], label=f"Arm {arm_idx}", linewidth=2)
+        plt.legend()
+        
+        plt.subplot(1, 2, 2)
+        for arm_idx in range(n_arms):
+            linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
+            plt.plot(counts_adapt_mean[:, arm_idx], label=f"Arm {arm_idx}", linewidth=2, linestyle=linestyle)
+        plt.legend()
+        plt.savefig(save_dir / f"pulls_sims_{sims}.png")
+        plt.close()
+
+        # --- PLOT 3: SPAGHETTI ---
+        plt.figure(figsize=(14, 6))
+        for arm_idx in range(n_arms):
+            color = f'C{arm_idx}'
+            linestyle = '-' if true_means[arm_idx] > mu_0 else '--'
+            for sim_counts in counts_adapt_list:
+                plt.plot(sim_counts[:, arm_idx], color=color, alpha=0.1, linewidth=0.5, linestyle=linestyle)
+            plt.plot(counts_adapt_mean[:, arm_idx], color=color, linewidth=2, linestyle=linestyle)
+        plt.savefig(save_dir / f"spaghetti_sims_{sims}.png")
+        plt.close()
+
+n_sims = 100
+def run_task_2():
+    print(f" Simultation lois normales")
+    
+    # Configuration des dossiers
+    git_root = find_git_root()
+    save_dir = git_root / "figure_reconstitutive" / "task_normal_params"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Les 4 scénarios demandés
+    # N(mu, 2) signifie Variance = 2, donc Sigma = sqrt(2) ≈ 1.414
+    configs = [
+        {"name": "Delta_Sigma1",      "d": delta,     "s": 1.0},
+        {"name": "DeltaSur4_Sigma1",  "d": delta / 4, "s": 1.0},
+        {"name": "Delta_Sigma2",      "d": delta,     "s": 2.0},
+        {"name": "DeltaSur4_Sigma2",  "d": delta / 4, "s": 2.0},
+        {"name": "DeltaSur2_Sigma0.02",  "d": delta / 2, "s": 0.02},
+        {"name": "Delta_Sigma0.02",  "d": delta , "s": 0.02}
+    ]
+
+    for conf in configs:
+        print(f"\n--- Scénario : {conf['name']} (Sigma={conf['s']:.3f}) ---")
+        
+        # Définition des moyennes pour ce scénario
+        # 2 bras gagnants, 2 bras neutres, 2 bras nuls
+        current_means = np.array([ conf['d'], conf['d'], 0.0, 0.0])
+        n_arms = len(current_means)
+        
+        # Génération des données avec la 'scale' (sigma) spécifique
+        all_arm_data = prepare_experiment(current_means, horizon, n_sims, scale=conf['s'])
+        
+        # Exécution des algos
+        # IMPORTANT : On récupère bien 'counts_adapt_list' pour le spaghetti plot
+        _, _, counts_unif_mean, _ = run_experiment(current_means, horizon, 'uniform', all_arm_data, n_sims)
+        tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(current_means, horizon, 'adaptive', all_arm_data, n_sims)
+        
+        # --- GRAPHIQUE 1 : TPR ---
+        plt.figure(figsize=(10, 5))
+        plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+        plt.axhline(y=1.0, color='gray', linestyle=':', alpha=0.5)
+        plt.title(f"TPR - {conf['name']}")
+        plt.legend()
+        plt.savefig(save_dir / f"tpr_{conf['name']}.png")
+        plt.close()
+
+        # --- GRAPHIQUE 2 : PULLS MOYENS ---
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 2)
+        plt.title(f"Adaptive Mean Pulls ({conf['name']})")
+        for i in range(n_arms):
+            ls = '-' if current_means[i] > mu_0 else '--'
+            plt.plot(counts_adapt_mean[:, i], label=f"Arm {i} (μ={current_means[i]:.3f})", linestyle=ls)
+        plt.legend(fontsize='small')
+        plt.savefig(save_dir / f"pulls_{conf['name']}.png")
+        plt.close()
+
+        # --- GRAPHIQUE 3 : SPAGHETTI PLOT (Celui que tu voulais ajouter) ---
+        plt.figure(figsize=(14, 6))
+        plt.title(f"Adaptive: Individual Simulations ({conf['name']})")
+        
+        for arm_idx in range(n_arms):
+            color = f'C{arm_idx}' 
+            ls = '-' if current_means[arm_idx] > mu_0 else '--'
+            label = f"Arm {arm_idx} (μ={current_means[arm_idx]:.3f})"
+            
+            # Tracé des lignes individuelles (fines et transparentes)
+            for sim_counts in counts_adapt_list:
+                plt.plot(sim_counts[:, arm_idx], color=color, alpha=0.1, linewidth=0.5, linestyle=ls)
+
+            # Tracé de la moyenne (épaisse)
+            plt.plot(counts_adapt_mean[:, arm_idx], label=label, color=color, linewidth=2.5, linestyle=ls)
+            
+        plt.xlabel("Time (t)")
+        plt.ylabel("Cumulative Pulls")
+        plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(save_dir / f"spaghetti_{conf['name']}.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+    print(f"\n Terminé ! Résultats dans : {save_dir}")
+
+if __name__ == "__main__":
+    # run_task_1() 
+    run_task_2()
