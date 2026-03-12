@@ -163,7 +163,8 @@ class JamiesonJainAlgo:
         # 2. Calcul des p-values anytime pour tous les bras
         # On stocke des tuples : (p_value, index_du_bras)
         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        
+        p_values = [self.get_anytime_pvalue(i) for i in range(self.n)]
+
         # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
         p_values_with_idx.sort(key=lambda x: x[0])
         
@@ -187,6 +188,8 @@ class JamiesonJainAlgo:
                 
         # 5. Mise à jour de l'ensemble global des découvertes
         self.S_t.update(current_St)
+        return(p_values)
+
 
     def get_anytime_pvalue(self, arm_idx):
         """
@@ -330,7 +333,8 @@ class UniformAlgo:
         # 2. Calcul des p-values anytime pour tous les bras
         # On stocke des tuples : (p_value, index_du_bras)
         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        
+        p_values = [self.get_anytime_pvalue(i) for i in range(self.n)]
+
         # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
         p_values_with_idx.sort(key=lambda x: x[0])
         
@@ -354,6 +358,7 @@ class UniformAlgo:
                 
         # 5. Mise à jour de l'ensemble global des découvertes
         self.S_t.update(current_St)
+        return(p_values)
 
     def bh_update(self, arm_idx, observation):
         """
@@ -521,10 +526,16 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
     # Store the AVERAGE number of pulls at each time t
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
     counts_list=[]
+    p_values_list_by_sim=[]
+    p_values_mean=[]
+
+    
 
     print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
     
     for no_sim in tqdm(range(n_simulations)):
+        p_values_list=[]
+
         # Track how many times we have pulled each arm *in this specific simulation*
         # This is necessary to fetch the correct next value from the pre-generated list.
         all_arm_counts = [0 for _ in range(n_arms)]
@@ -564,7 +575,8 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
                 all_arm_counts[arm]+=1
                 
                 #algo.bh_update(arm, observation)
-                algo.bh_update_optimized(arm, observation)
+                p_values__t=algo.bh_update_optimized(arm, observation)
+                p_values_list.append(p_values__t) #register the p value of the iteration t in the p_value_list for the simulation no_sim
                 
                 nb_found = len(algo.S_t.intersection(true_positives))
                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
@@ -580,11 +592,16 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
         counts_arr = np.array(algo.counts_evolution)[:horizon+1]
         counts_list.append(counts_arr)
         counts_evolution_sum += counts_arr
+        p_values_list_by_sim.append(p_values_list)
 
     tpr_history_mean = tpr_history_sum / n_simulations
     counts_history_mean = counts_evolution_sum / n_simulations
+    
+    np_p_values_list_by_sim=np.array(p_values_list_by_sim)
+    np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0)
 
-    return tpr_history_mean, tpr_list, counts_history_mean, counts_list
+
+    return tpr_history_mean, tpr_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean
 
 # -----------------------------------------------------------------------------
 # PART 3: CONFIGURATION AND EXECUTION
@@ -617,8 +634,10 @@ if __name__ == "__main__":
     all_arm_data = prepare_experiment(true_means, horizon, n_sims)
     
     # 1. Run Simulations
-    tpr_unif, _, counts_unif_mean, counts_unif_list = run_experiment(true_means, horizon, 'uniform', all_arm_data, n_sims)
-    tpr_adapt, _, counts_adapt_mean, counts_adapt_list = run_experiment(true_means, horizon, 'adaptive', all_arm_data, n_sims)
+    tpr_unif, _, counts_unif_mean, counts_unif_list, np_p_value_list_unif, np_p_value_mean_unif = run_experiment(true_means, horizon, 'uniform', all_arm_data, n_sims)
+    tpr_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt = run_experiment(true_means, horizon, 'adaptive', all_arm_data, n_sims)
+
+
     
     # --- PLOT 1: TPR ---
     plt.figure(1, figsize=(10, 5))
@@ -690,3 +709,79 @@ if __name__ == "__main__":
     print("Displaying plots...")
     plt.tight_layout()
     plt.savefig(git_root / "figure_reconstitutive/figure3.png", dpi=300, bbox_inches="tight")
+
+    # --- PLOT 4: P-VALUES ---
+    plt.figure(4, figsize=(12, 6))
+    # Subplot 1: Uniform
+    plt.subplot(1, 2, 1)
+    plt.title("Uniform: P values by iteration and arm")
+    for arm_idx in range(n_arms):
+        print("bc1")
+        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+        plt.plot(np_p_value_mean_unif[:, arm_idx], label=label, linewidth=2)
+    plt.xlabel("Time (t)")
+    plt.ylabel("P values")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    # Subplot 2: Adaptative
+    plt.subplot(1, 2, 2)
+    plt.title("Adaptative: P values by iteration and arm")
+    for arm_idx in range(n_arms):
+        print("bc2")
+        label = f"Arm {arm_idx} ($mu$={true_means[arm_idx]})"
+        plt.plot(np_p_value_mean_adapt[:, arm_idx], label=label, linewidth=2)
+    plt.xlabel("Time (t)")
+    plt.ylabel("P values")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(git_root / "figure_reconstitutive/figure4.png", dpi=300, bbox_inches="tight")
+
+
+# --- PLOT 5: P-VALUES (Grille Séparée avec Couleurs Cohérentes) ---
+
+# Définition explicite des couleurs pour chaque bras
+# Tu peux choisir un "cmap" (color map) ou définir ta propre liste
+# Utilisons un colormap prédéfini 'tab10' ou 'Set1' qui a des couleurs bien distinctes.
+num_colors = n_arms
+cmap = plt.get_cmap('tab10') # Tu peux aussi utiliser plt.cm.get_cmap('Set1')
+# Générer une liste de couleurs distinctes à partir du cmap
+# On convertit le cmap en une liste de couleurs RGBA
+arm_colors = [cmap(i) for i in range(num_colors)]
+
+# Création d'une grille : n_arms (lignes) x 2 (colonnes)
+fig, axes = plt.subplots(nrows=n_arms, ncols=2, 
+                         figsize=(12, 2.5 * n_arms), 
+                         sharex=True, sharey=True)
+
+# Ajout des titres généraux sur la première ligne
+axes[0, 0].set_title("Uniform: P values by iteration")
+axes[0, 1].set_title("Adaptative: P values by iteration")
+
+for arm_idx in range(n_arms):
+    # Récupérer la couleur spécifique pour ce bras
+    color = arm_colors[arm_idx]
+
+    # Colonne 0 : UNIFORM
+    label_unif = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
+    # On ajoute le paramètre 'color=color' ici
+    axes[arm_idx, 0].plot(np_p_value_mean_unif[:, arm_idx], label=label_unif, linewidth=2, color=color)
+    axes[arm_idx, 0].set_ylabel("P value")
+    axes[arm_idx, 0].legend(loc="upper right", fontsize="small")
+    axes[arm_idx, 0].grid(True, alpha=0.3)
+
+    # Colonne 1 : ADAPTATIVE
+    label_adapt = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
+    # On ajoute le paramètre 'color=color' ici aussi pour la cohérence
+    axes[arm_idx, 1].plot(np_p_value_mean_adapt[:, arm_idx], label=label_adapt, linewidth=2, color=color)
+    axes[arm_idx, 1].legend(loc="upper right", fontsize="small")
+    axes[arm_idx, 1].grid(True, alpha=0.3)
+
+# Ajout de l'axe des abscisses uniquement sur la dernière ligne
+axes[-1, 0].set_xlabel("Time (t)")
+axes[-1, 1].set_xlabel("Time (t)")
+
+plt.tight_layout()
+plt.savefig(git_root / "figure_reconstitutive/figure5.png", dpi=300, bbox_inches="tight")
+# plt.show()
