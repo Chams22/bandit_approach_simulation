@@ -8,7 +8,7 @@ np.random.seed(1234)
 # PART 1: THE ALGORITHM
 # -----------------------------------------------------------------------------
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta):
+    def __init__(self, n_arms, mu_0, delta, init_pulls=1):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -20,10 +20,13 @@ class JamiesonJainAlgo:
             The baseline threshold. We want to identify arms with mean > mu_0.
         delta : float
             The confidence level / False Discovery Rate (FDR) parameter (e.g., 0.05).
+        init_pulls : int, optional
+            Number of initial pulls per arm before running adaptive phase (default=1).
         """
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
+        self.init_pulls = init_pulls
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
@@ -72,7 +75,7 @@ class JamiesonJainAlgo:
         Determines which arm to pull next based on the UCB strategy.
 
         Strategy:
-        1. If t < n, pull every arm once for initialization.
+        1. During initialization phase, cycle through arms.
         2. Identify candidate arms (those NOT yet in the discovery set S_t).
         3. If no candidates remain, return "stop".
         4. Otherwise, select the candidate with the highest Upper Confidence Bound (UCB).
@@ -82,8 +85,10 @@ class JamiesonJainAlgo:
         int or str
             The index of the arm to pull, or "stop" if all arms are discovered.
         """
-        if self.time < self.n:
-            return self.time
+        # Initialization phase: cycle through arms
+        init_phase_end = self.n * self.init_pulls
+        if self.time < init_phase_end:
+            return self.time % self.n
         
         candidates = [i for i in range(self.n) if i not in self.S_t]
         
@@ -441,7 +446,7 @@ class UniformAlgo:
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 
-def run_experiment(true_means, horizon, mode, n_simulations=20): #attention mettre seed pour stabiliser
+def run_experiment(true_means, horizon, mode, n_simulations=20, init_pulls=1): #attention mettre seed pour stabiliser
     """
     Runs Monte-Carlo simulations to evaluate the performance of the bandit algorithm.
 
@@ -461,6 +466,8 @@ def run_experiment(true_means, horizon, mode, n_simulations=20): #attention mett
     n_simulations : int, optional
         The number of independent Monte-Carlo simulations to run for averaging results 
         (default is 20).
+    init_pulls : int, optional
+        Number of initial pulls per arm (default is 1).
 
     Returns
     -------
@@ -487,13 +494,13 @@ def run_experiment(true_means, horizon, mode, n_simulations=20): #attention mett
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
     counts_list=[]
 
-    print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
+    print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs, init_pulls={init_pulls})")
     
     for no_sim in tqdm(range(n_simulations)):
         all_data=[[] for i in range(n_arms)]
 
         if mode=='adaptive':
-            algo = JamiesonJainAlgo(n_arms, mu_0, delta)
+            algo = JamiesonJainAlgo(n_arms, mu_0, delta, init_pulls=init_pulls)
         elif mode=='uniform':
             algo = UniformAlgo(n_arms, mu_0, delta)
         else:
@@ -574,6 +581,12 @@ if __name__ == "__main__":
     tpr_unif, _, counts_unif_mean, counts_unif_list, all_data = run_experiment(true_means, horizon, 'uniform', n_sims)
     tpr_adapt, _, counts_adapt_mean, counts_adapt_list, all_data = run_experiment(true_means, horizon, 'adaptive', n_sims)
     
+    # Test with 30 initial pulls
+    print("\n" + "="*70)
+    print("Testing with 30 initial pulls")
+    print("="*70)
+    tpr_adapt_30, _, counts_adapt_mean_30, counts_adapt_list_30, all_data = run_experiment(true_means, horizon, 'adaptive', n_sims, init_pulls=30)
+    
     # --- PLOT 1: TPR ---
     plt.figure(1, figsize=(10, 5))
     plt.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
@@ -643,3 +656,17 @@ if __name__ == "__main__":
     
     plt.tight_layout()
     plt.savefig(git_root / "figure_real_time/figure3.png", dpi=300, bbox_inches="tight")
+    
+    # --- PLOT 4: COMPARISON init_pulls=1 vs init_pulls=30 ---
+    plt.figure(4, figsize=(12, 5))
+    plt.plot(tpr_adapt, label='init_pulls=1', color='#1f77b4', linewidth=2)
+    plt.plot(tpr_adapt_30, label='init_pulls=30', color='#ff7f0e', linewidth=2)
+    plt.axhline(y=1.0, color='gray', linestyle=':', alpha=0.5)
+    plt.title("Impact of Initialization: init_pulls=1 vs init_pulls=30")
+    plt.xlabel("Time (t)")
+    plt.ylabel("True Positive Rate (TPR)")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(git_root / "figure_real_time/figure4_init_comparison.png", dpi=300, bbox_inches="tight")
+    print("\nFigure 4 saved: figure4_init_comparison.png")
