@@ -458,7 +458,7 @@ with st.sidebar:
     mu_0 = st.number_input("Seuil μ₀", value=0.0, step=0.1)
     
     st.markdown("---")
-    st.header("🎯 Configuration des bras")
+    st.header("Configuration des bras")
     
     # Configuration des bras
     n_arms = st.number_input("Nombre de bras", min_value=2, max_value=10, value=6, step=1)
@@ -492,12 +492,12 @@ if run_button:
     # Exécution des simulations
     col1, col2 = st.columns(2)
     with col1:
-        st.info("📊 Simulation Uniforme en cours...")
+        st.info("Simulation Uniforme en cours...")
         tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif = run_experiment(
             true_means, horizon, 'uniform', all_arm_data, n_sims, mu_0)
     
     with col2:
-        st.info("📈 Simulation Adaptive en cours...")
+        st.info("Simulation Adaptive en cours...")
         tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt = run_experiment(
             true_means, horizon, 'adaptive', all_arm_data, n_sims, mu_0)
     
@@ -511,11 +511,11 @@ if run_button:
     
     # Création des onglets
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📈 TPR - Vitesse de découverte", 
-        "🎲 Répartition des tirages", 
-        "🍝 Spaghetti Plot",
-        "📉 Intervalles de confiance",
-        "📋 Données brutes"
+        "TPR - Vitesse de découverte", 
+        "Répartition des tirages", 
+        "Spaghetti Plot",
+        "Intervalles de confiance",
+        "Données brutes"
     ])
     
     with tab1:
