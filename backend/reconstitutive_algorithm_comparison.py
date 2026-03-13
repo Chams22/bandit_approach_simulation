@@ -848,9 +848,9 @@ def run_task_2():
     configs = [
         {"name": "Delta_Sigma1",      "d": delta,     "s": 1.0},
         {"name": "DeltaSur4_Sigma1",  "d": delta / 4, "s": 1.0},
-        {"name": "Delta_Sigma2",      "d": delta,     "s": 2.0},
-        {"name": "DeltaSur4_Sigma2",  "d": delta / 4, "s": 2.0},
-        {"name": "DeltaSur2_Sigma0.02",  "d": delta / 2, "s": 0.02},
+        {"name": "Delta_Sigma2",      "d": delta,     "s": 1.414},
+        {"name": "DeltaSur4_Sigma2",  "d": delta / 4, "s": 1.414},
+        {"name": "DeltaSur2_Sigma0.02",  "d": delta / 4, "s": 0.02},
         {"name": "Delta_Sigma0.02",  "d": delta , "s": 0.02}
     ]
 
@@ -880,14 +880,40 @@ def run_task_2():
         plt.close()
 
         # --- GRAPHIQUE 2 : PULLS MOYENS ---
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(15, 6)) 
+
+        # --- SUBPLOT 1 : UNIFORM ---
+        plt.subplot(1, 2, 1)
+        plt.title("Uniform: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            label = f"Arm {arm_idx} ($\mu$={true_means[arm_idx]:.3f})"
+            plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
+
+        # On met les labels une seule fois, en dehors de la boucle for
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend(fontsize='small')
+        plt.grid(True, alpha=0.3)
+
+        # --- SUBPLOT 2 : ADAPTIVE ---
         plt.subplot(1, 2, 2)
         plt.title(f"Adaptive Mean Pulls ({conf['name']})")
         for i in range(n_arms):
+            # Style de ligne : continu pour les bons bras (>mu_0), pointillé pour les nuls
             ls = '-' if current_means[i] > mu_0 else '--'
-            plt.plot(counts_adapt_mean[:, i], label=f"Arm {i} (μ={current_means[i]:.3f})", linestyle=ls)
-        plt.legend(fontsize='small')
-        plt.savefig(save_dir / f"pulls_{conf['name']}.png")
+            plt.plot(counts_adapt_mean[:, i], 
+                    label=f"Arm {i} ($\mu$={current_means[i]:.3f})", 
+                    linestyle=ls, 
+                    linewidth=2)
+
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend(fontsize='small', bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.grid(True, alpha=0.3)
+
+        # 2. Sauvegarde propre
+        plt.tight_layout() # Évite que les titres se chevauchent
+        plt.savefig(save_dir / f"pulls_{conf['name']}.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- GRAPHIQUE 3 : SPAGHETTI PLOT (Celui que tu voulais ajouter) ---
@@ -916,6 +942,45 @@ def run_task_2():
 
     print(f"\n Terminé ! Résultats dans : {save_dir}")
 
+
+def run_task_3():
+    print("Impact de l'Initialisation")
+    
+    # Paramètres de test
+    start_pulls_to_test = [1, 10, 30, 100] # On compare différents départs
+    n_sims = 1000
+    horizon = 800
+    
+    git_root = find_git_root()
+    save_dir = git_root / "figure_reconstitutive" / "task_initialization"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Moyennes fixées pour comparer équitablement
+    true_means = np.array([0.55, 0.50, 0.45, 0.1, 0.1]) 
+    
+    for init_pulls in start_pulls_to_test:
+        print(f"Test avec {init_pulls} tirages initiaux par bras...")
+        
+        # On génère les données
+        all_arm_data = prepare_experiment(true_means, horizon, n_sims, scale=0.1)
+        
+        # ICI : Il faut s'assurer que ton algo 'Adaptive' 
+        # prend en compte 'init_pulls' dans ses paramètres.
+        # Si ton algo n'a pas cette option, on peut simuler en 
+        # "consommant" les 'init_pulls' premiers temps de l'horizon.
+        
+        tpr_adapt, _, counts_mean, _ = run_experiment(
+            true_means, horizon,'adaptive', all_arm_data, n_simulations=n_sims, mu_0=0.0, init_pulls=init_pulls)
+
+        # Sauvegarde du TPR pour comparer la vitesse de convergence
+        plt.figure()
+        plt.plot(tpr_adapt, label=f'Init: {init_pulls} pulls')
+        plt.title(f"Impact de l'initialisation ({init_pulls} tirages)")
+        plt.savefig(save_dir / f"tpr_init_{init_pulls}.png")
+        plt.close()
+
+
 if __name__ == "__main__":
-    # run_task_1() 
-    run_task_2()
+    run_task_1() 
+    #run_task_2()
+    #run_task_3()
