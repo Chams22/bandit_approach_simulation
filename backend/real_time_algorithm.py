@@ -670,3 +670,101 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(git_root / "figure_real_time/figure4_init_comparison.png", dpi=300, bbox_inches="tight")
     print("\nFigure 4 saved: figure4_init_comparison.png")
+    
+    # PART D: Test different proportions of true positives
+    print("\n" + "="*70)
+    print("PART D: Testing different proportions of true positives")
+    print("="*70)
+    
+    # Define different proportions: (n_good, n_bad)
+    proportions = [(1, 9), (9, 1), (5, 5), (4, 6), (6, 4)]
+    results_by_proportion = {}
+    
+    for n_good, n_bad in proportions:
+        print(f"\n--- Testing with {n_good} good arms and {n_bad} bad arms ---")
+        
+        # Create true_means: good arms with effect size 0.5, bad arms with 0
+        total_arms = n_good + n_bad
+        true_means_prop = np.concatenate([
+            np.ones(n_good) * 0.5,    # good arms
+            np.zeros(n_bad)            # bad arms
+        ])
+        
+        tpr_adapt_prop, _, counts_adapt_prop, _, _ = run_experiment(
+            true_means_prop, horizon, 'adaptive', n_sims
+        )
+        
+        results_by_proportion[(n_good, n_bad)] = {
+            'tpr': tpr_adapt_prop,
+            'counts': counts_adapt_prop,
+            'true_means': true_means_prop
+        }
+    
+    # --- PLOT 5: TPR for different proportions ---
+    plt.figure(5, figsize=(12, 7))
+    
+    colors = plt.cm.viridis(np.linspace(0, 1, len(proportions)))
+    
+    for idx, (n_good, n_bad) in enumerate(proportions):
+        tpr = results_by_proportion[(n_good, n_bad)]['tpr']
+        label = f'{n_good}G/{n_bad}B ({n_good}/{n_good+n_bad} positive)'
+        plt.plot(tpr, label=label, color=colors[idx], linewidth=2)
+    
+    plt.axhline(y=1.0, color='gray', linestyle=':', alpha=0.5)
+    plt.title("Impact of Proportion: Adaptive Algorithm TPR for Different Ratios")
+    plt.xlabel("Time (t)")
+    plt.ylabel("True Positive Rate (TPR)")
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(git_root / "figure_real_time/figure5_proportions.png", dpi=300, bbox_inches="tight")
+    print("Figure 5 saved: figure5_proportions.png")
+    
+    # --- PLOT 6: Convergence time vs proportion ---
+    plt.figure(6, figsize=(10, 6))
+    
+    convergence_times = []
+    proportion_labels = []
+    
+    for n_good, n_bad in proportions:
+        tpr = results_by_proportion[(n_good, n_bad)]['tpr']
+        # Find time to reach TPR >= 0.95
+        idx_95 = np.where(tpr >= 0.95)[0]
+        time_95 = idx_95[0] if len(idx_95) > 0 else horizon
+        convergence_times.append(time_95)
+        proportion_labels.append(f'{n_good}G/{n_bad}B')
+    
+    bars = plt.bar(range(len(proportions)), convergence_times, color=colors, edgecolor='black', linewidth=1.5)
+    plt.xticks(range(len(proportions)), proportion_labels, fontsize=11)
+    plt.xlabel("Proportion (G=Good, B=Bad)", fontsize=12)
+    plt.ylabel("Time to reach TPR ≥ 0.95 (steps)", fontsize=12)
+    plt.title("Convergence Speed vs Proportion of True Positives")
+    plt.grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels on bars
+    for bar, time in zip(bars, convergence_times):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height,
+                f'{int(time)}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(git_root / "figure_real_time/figure6_convergence_by_proportion.png", dpi=300, bbox_inches="tight")
+    print("Figure 6 saved: figure6_convergence_by_proportion.png")
+    
+    # --- Summary table ---
+    print("\n" + "="*70)
+    print("SUMMARY: Impact of Proportion on Algorithm Performance")
+    print("="*70)
+    print(f"{'Proportion':<15} {'Time to TPR≥95%':<20} {'Final TPR':<15}")
+    print("-"*70)
+    
+    for n_good, n_bad in proportions:
+        tpr = results_by_proportion[(n_good, n_bad)]['tpr']
+        idx_95 = np.where(tpr >= 0.95)[0]
+        time_95 = idx_95[0] if len(idx_95) > 0 else horizon
+        final_tpr = tpr[-1]
+        
+        proportion_str = f'{n_good}G/{n_bad}B'
+        print(f"{proportion_str:<15} {time_95:<20} {final_tpr:<15.4f}")
+    
+    print("="*70 + "\n")
