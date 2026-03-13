@@ -644,20 +644,20 @@ if run_button:
 else:
     # Message d'accueil
     st.markdown("""
-    ## 👋 Bienvenue sur le simulateur d'algorithmes de bandit!
+    ## Bienvenue sur le simulateur d'algorithmes de bandit!
     
     Cette application vous permet d'explorer et de comparer deux algorithmes:
     
     * **Adaptive** (Jamieson & Jain 2018): Utilise une stratégie UCB pour allouer plus de tirages aux bras prometteurs
     * **Uniform**: Échantillonne tous les bras de manière uniforme
     
-    ### 🎮 Comment utiliser:
+    ### Comment utiliser:
     1. Ajustez les paramètres dans la barre latérale
     2. Configurez les moyennes des différents bras
     3. Cliquez sur "Lancer la simulation"
     4. Explorez les résultats dans les différents onglets
     
-    ### 📊 Les graphiques disponibles:
+    ### Les graphiques disponibles:
     * **TPR**: Vitesse à laquelle l'algorithme identifie les bons bras
     * **Répartition**: Comment les tirages sont alloués entre les bras
     * **Spaghetti**: Visualisation de la variabilité entre simulations
@@ -665,14 +665,14 @@ else:
     * **Données brutes**: Export des résultats
     
     ---
-    **Commencez par configurer vos paramètres dans le panneau de gauche ➡️**
+    **Commencez par configurer vos paramètres dans le panneau de gauche **
     """)
     
     # Image ou information supplémentaire
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.info("📈 **Adaptive**\nAlloue plus de ressources aux bras prometteurs")
+        st.info(" **Adaptive**\nAlloue plus de ressources aux bras prometteurs")
     with col2:
-        st.info("📊 **Uniform**\nDistribution égale des tirages")
+        st.info(" **Uniform**\nDistribution égale des tirages")
     with col3:
-        st.info("🎯 **Objectif**\nIdentifier les bras avec μ > μ₀")
+        st.info("**Objectif**\nIdentifier les bras avec μ > μ₀")
