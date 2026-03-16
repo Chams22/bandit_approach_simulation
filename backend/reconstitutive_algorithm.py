@@ -527,8 +527,6 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
     counts_list=[]
     p_values_list_by_sim=[]
-    p_values_mean=[]
-
     
 
     print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
@@ -575,8 +573,8 @@ def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20):
                 all_arm_counts[arm]+=1
                 
                 #algo.bh_update(arm, observation)
-                p_values__t=algo.bh_update_optimized(arm, observation)
-                p_values_list.append(p_values__t) #register the p value of the iteration t in the p_value_list for the simulation no_sim
+                p_values_t=algo.bh_update_optimized(arm, observation)
+                p_values_list.append(p_values_t) #register the p value of the iteration t in the p_value_list for the simulation no_sim
                 
                 nb_found = len(algo.S_t.intersection(true_positives))
                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
@@ -739,49 +737,49 @@ if __name__ == "__main__":
     plt.savefig(git_root / "figure_reconstitutive/figure4.png", dpi=300, bbox_inches="tight")
 
 
-# --- PLOT 5: P-VALUES (Grille Séparée avec Couleurs Cohérentes) ---
+    # --- PLOT 5: P-VALUES (Grille Séparée avec Couleurs Cohérentes) ---
 
-# Définition explicite des couleurs pour chaque bras
-# Tu peux choisir un "cmap" (color map) ou définir ta propre liste
-# Utilisons un colormap prédéfini 'tab10' ou 'Set1' qui a des couleurs bien distinctes.
-num_colors = n_arms
-cmap = plt.get_cmap('tab10') # Tu peux aussi utiliser plt.cm.get_cmap('Set1')
-# Générer une liste de couleurs distinctes à partir du cmap
-# On convertit le cmap en une liste de couleurs RGBA
-arm_colors = [cmap(i) for i in range(num_colors)]
+    # Définition explicite des couleurs pour chaque bras
+    # Tu peux choisir un "cmap" (color map) ou définir ta propre liste
+    # Utilisons un colormap prédéfini 'tab10' ou 'Set1' qui a des couleurs bien distinctes.
+    num_colors = n_arms
+    cmap = plt.get_cmap('tab10') # Tu peux aussi utiliser plt.cm.get_cmap('Set1')
+    # Générer une liste de couleurs distinctes à partir du cmap
+    # On convertit le cmap en une liste de couleurs RGBA
+    arm_colors = [cmap(i) for i in range(num_colors)]
 
-# Création d'une grille : n_arms (lignes) x 2 (colonnes)
-fig, axes = plt.subplots(nrows=n_arms, ncols=2, 
-                         figsize=(12, 2.5 * n_arms), 
-                         sharex=True, sharey=True)
+    # Création d'une grille : n_arms (lignes) x 2 (colonnes)
+    fig, axes = plt.subplots(nrows=n_arms, ncols=2, 
+                            figsize=(12, 2.5 * n_arms), 
+                            sharex=True, sharey=True)
 
-# Ajout des titres généraux sur la première ligne
-axes[0, 0].set_title("Uniform: P values by iteration")
-axes[0, 1].set_title("Adaptative: P values by iteration")
+    # Ajout des titres généraux sur la première ligne
+    axes[0, 0].set_title("Uniform: P values by iteration")
+    axes[0, 1].set_title("Adaptative: P values by iteration")
 
-for arm_idx in range(n_arms):
-    # Récupérer la couleur spécifique pour ce bras
-    color = arm_colors[arm_idx]
+    for arm_idx in range(n_arms):
+        # Récupérer la couleur spécifique pour ce bras
+        color = arm_colors[arm_idx]
 
-    # Colonne 0 : UNIFORM
-    label_unif = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
-    # On ajoute le paramètre 'color=color' ici
-    axes[arm_idx, 0].plot(np_p_value_mean_unif[:, arm_idx], label=label_unif, linewidth=2, color=color)
-    axes[arm_idx, 0].set_ylabel("P value")
-    axes[arm_idx, 0].legend(loc="upper right", fontsize="small")
-    axes[arm_idx, 0].grid(True, alpha=0.3)
+        # Colonne 0 : UNIFORM
+        label_unif = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
+        # On ajoute le paramètre 'color=color' ici
+        axes[arm_idx, 0].plot(np_p_value_mean_unif[:, arm_idx], label=label_unif, linewidth=2, color=color)
+        axes[arm_idx, 0].set_ylabel("P value")
+        axes[arm_idx, 0].legend(loc="upper right", fontsize="small")
+        axes[arm_idx, 0].grid(True, alpha=0.3)
 
-    # Colonne 1 : ADAPTATIVE
-    label_adapt = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
-    # On ajoute le paramètre 'color=color' ici aussi pour la cohérence
-    axes[arm_idx, 1].plot(np_p_value_mean_adapt[:, arm_idx], label=label_adapt, linewidth=2, color=color)
-    axes[arm_idx, 1].legend(loc="upper right", fontsize="small")
-    axes[arm_idx, 1].grid(True, alpha=0.3)
+        # Colonne 1 : ADAPTATIVE
+        label_adapt = fr"Arm {arm_idx} ($\mu$={true_means[arm_idx]})"
+        # On ajoute le paramètre 'color=color' ici aussi pour la cohérence
+        axes[arm_idx, 1].plot(np_p_value_mean_adapt[:, arm_idx], label=label_adapt, linewidth=2, color=color)
+        axes[arm_idx, 1].legend(loc="upper right", fontsize="small")
+        axes[arm_idx, 1].grid(True, alpha=0.3)
 
-# Ajout de l'axe des abscisses uniquement sur la dernière ligne
-axes[-1, 0].set_xlabel("Time (t)")
-axes[-1, 1].set_xlabel("Time (t)")
+    # Ajout de l'axe des abscisses uniquement sur la dernière ligne
+    axes[-1, 0].set_xlabel("Time (t)")
+    axes[-1, 1].set_xlabel("Time (t)")
 
-plt.tight_layout()
-plt.savefig(git_root / "figure_reconstitutive/figure5.png", dpi=300, bbox_inches="tight")
-# plt.show()
+    plt.tight_layout()
+    plt.savefig(git_root / "figure_reconstitutive/figure5.png", dpi=300, bbox_inches="tight")
+    # plt.show()
