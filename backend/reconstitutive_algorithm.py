@@ -624,7 +624,7 @@ if __name__ == "__main__":
     mu_0 = 0.0
     delta = 0.05
     horizon = 800
-    n_sims = 1000
+    n_sims = 100
     
     true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
     n_arms = len(true_means)
