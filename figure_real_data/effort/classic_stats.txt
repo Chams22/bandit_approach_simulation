@@ -1,0 +1,242 @@
+List of the statistics
+
+arm nb 0 : 'haystack_01'
+ mean = 1026.0968
+ var = 788638.4237 
+
+arm nb 1 : 'haystack_02'
+ mean = 1145.45
+ var = 980944.6641 
+
+arm nb 2 : 'haystack_03'
+ mean = 386.5
+ var = 165500.7 
+
+arm nb 3 : 'haystack_04'
+ mean = 1246.7969
+ var = 905002.1644 
+
+arm nb 4 : 'haystack_05'
+ mean = 843.5385
+ var = 530512.9359 
+
+arm nb 5 : 'haystack_06'
+ mean = 856.8
+ var = 589266.8857 
+
+arm nb 6 : 'haystack_07'
+ mean = 689.6364
+ var = 649226.0545 
+
+arm nb 7 : 'haystack_08'
+ mean = 1046.3043
+ var = 992751.9053 
+
+arm nb 8 : 'haystack_09'
+ mean = 1206.3944
+ var = 773046.2708 
+
+arm nb 9 : 'haystack_10'
+ mean = 928.9091
+ var = 645084.2771 
+
+arm nb 10 : 'haystack_11'
+ mean = 954.25
+ var = 922528.713 
+
+arm nb 11 : 'haystack_12'
+ mean = 1016.6
+ var = 564524.25 
+
+arm nb 12 : 'haystack_13'
+ mean = 685.0
+ var = 455884.0 
+
+arm nb 13 : 'haystack_14'
+ mean = 1051.8214
+ var = 626348.9669 
+
+arm nb 14 : 'haystack_15'
+ mean = 540.125
+ var = 427082.4107 
+
+arm nb 15 : 'haystack_16'
+ mean = 805.8125
+ var = 585107.3625 
+
+arm nb 16 : 'haystack_17'
+ mean = 752.3333
+ var = 373852.2667 
+
+arm nb 17 : 'haystack_18'
+ mean = 1041.7222
+ var = 865307.9206 
+
+arm nb 18 : 'haystack_19'
+ mean = 786.5
+ var = 565214.2727 
+
+arm nb 19 : 'haystack_20'
+ mean = 1233.3235
+ var = 864123.68 
+
+arm nb 20 : 'haystack_21'
+ mean = 1110.4872
+ var = 691527.9406 
+
+arm nb 21 : 'haystack_22'
+ mean = 634.1667
+ var = 421290.1667 
+
+arm nb 22 : 'haystack_23'
+ mean = 557.25
+ var = 603772.2143 
+
+arm nb 23 : 'haystack_24'
+ mean = 948.625
+ var = 705759.8967 
+
+arm nb 24 : 'haystack_25'
+ mean = 421.4286
+ var = 388840.619 
+
+arm nb 25 : 'haystack_26'
+ mean = 984.0
+ var = 673708.72 
+
+arm nb 26 : 'haystack_27'
+ mean = 720.25
+ var = 493871.9286 
+
+arm nb 27 : 'haystack_28'
+ mean = 1028.3043
+ var = 885662.1304 
+
+arm nb 28 : 'haystack_29'
+ mean = 616.625
+ var = 786296.5536 
+
+arm nb 29 : 'haystack_30'
+ mean = 1107.6
+ var = 865093.6588 
+
+arm nb 30 : 'haystack_31'
+ mean = 1065.5926
+ var = 693160.4046 
+
+arm nb 31 : 'haystack_32'
+ mean = 465.0
+ var = 207357.6 
+
+arm nb 32 : 'haystack_33'
+ mean = 707.2
+ var = 515805.0667 
+
+arm nb 33 : 'haystack_34'
+ mean = 1086.3077
+ var = 833552.7015 
+
+arm nb 34 : 'haystack_35'
+ mean = 564.2
+ var = 245739.7 
+
+arm nb 35 : 'haystack_36'
+ mean = 1014.6875
+ var = 850058.8024 
+
+arm nb 36 : 'haystack_37'
+ mean = 1074.9
+ var = 727518.8615 
+
+arm nb 37 : 'haystack_38'
+ mean = 1151.5714
+ var = 878206.8333 
+
+arm nb 38 : 'haystack_39'
+ mean = 938.84
+ var = 761508.14 
+
+arm nb 39 : 'haystack_40'
+ mean = 966.4706
+ var = 529754.2647 
+
+arm nb 40 : 'haystack_41'
+ mean = 1282.1909
+ var = 785034.9449 
+
+arm nb 41 : 'haystack_42'
+ mean = 1116.2885
+ var = 753845.0328 
+
+arm nb 42 : 'haystack_43'
+ mean = 901.8095
+ var = 700097.8619 
+
+arm nb 43 : 'haystack_44'
+ mean = 954.6471
+ var = 761456.9926 
+
+arm nb 44 : 'haystack_45'
+ mean = 1166.0217
+ var = 725557.2217 
+
+arm nb 45 : 'haystack_46'
+ mean = 892.0
+ var = 602355.2857 
+
+arm nb 46 : 'haystack_47'
+ mean = 743.4667
+ var = 764783.5524 
+
+arm nb 47 : 'haystack_48'
+ mean = 1141.9194
+ var = 648740.3049 
+
+arm nb 48 : 'haystack_49'
+ mean = 512.6667
+ var = 560826.6667 
+
+arm nb 49 : 'haystack_50'
+ mean = 1216.8866
+ var = 842639.1016 
+
+arm nb 50 : 'haystack_51'
+ mean = 376.2
+ var = 329701.2 
+
+arm nb 51 : 'haystack_52'
+ mean = 516.1667
+ var = 380088.5667 
+
+arm nb 52 : 'haystack_53'
+ mean = 713.8
+ var = 186510.7 
+
+arm nb 53 : 'haystack_54'
+ mean = 785.7
+ var = 471932.2333 
+
+arm nb 54 : 'haystack_55'
+ mean = 1011.2727
+ var = 654181.3506 
+
+arm nb 55 : 'haystack_56'
+ mean = 1084.303
+ var = 667396.4678 
+
+arm nb 56 : 'haystack_57'
+ mean = 1141.6111
+ var = 585181.673 
+
+arm nb 57 : 'haystack_58'
+ mean = 1201.4783
+ var = 700095.6329 
+
+arm nb 58 : 'haystack_59'
+ mean = 836.6316
+ var = 764876.4678 
+
+arm nb 59 : 'truly best treatment'
+ mean = 1525.5982
+ var = 850363.559 
+

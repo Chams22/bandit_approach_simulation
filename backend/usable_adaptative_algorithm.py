@@ -3,10 +3,6 @@ from tqdm import tqdm
 from scipy.optimize import brentq
 from statistics import mean
 
-
-# -----------------------------------------------------------------------------
-# PART 1: THE ALGORITHM
-# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # PART 1: THE ALGORITHM
 # -----------------------------------------------------------------------------
@@ -35,7 +31,7 @@ class JamiesonJainAlgo:
         
         # History for visualization
         # Initialized with zeros for t=0
-        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+        self.counts_evolution = [np.zeros(n_arms, dtype=int)] # nb of draw of each arms
 
     def phi(self, t, delta_val):
         """
@@ -73,6 +69,11 @@ class JamiesonJainAlgo:
     def init_process(self, data):
         for arm_idx, arm_data in enumerate(data):
             self.emp_means[arm_idx] = mean(arm_data)
+            self.counts[arm_idx] = len(arm_data)
+        self.time = int(np.sum(self.counts))
+        self.counts_evolution = [self.counts.copy()]  # remplace le [zeros] initial
+
+
 
     def select_arm(self):
         """
@@ -169,7 +170,7 @@ class JamiesonJainAlgo:
         # 2. Calcul des p-values anytime pour tous les bras
         # On stocke des tuples : (p_value, index_du_bras)
         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [self.get_anytime_pvalue(i) for i in range(self.n)]
+        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
 
         # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
         p_values_with_idx.sort(key=lambda x: x[0])
@@ -195,7 +196,6 @@ class JamiesonJainAlgo:
         # 5. Mise à jour de l'ensemble global des découvertes
         self.S_t.update(current_St)
         return(p_values)
-
 
     def get_anytime_pvalue(self, arm_idx):
         """
@@ -339,7 +339,7 @@ class UniformAlgo:
         # 2. Calcul des p-values anytime pour tous les bras
         # On stocke des tuples : (p_value, index_du_bras)
         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [self.get_anytime_pvalue(i) for i in range(self.n)]
+        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
 
         # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
         p_values_with_idx.sort(key=lambda x: x[0])
@@ -448,7 +448,88 @@ class UniformAlgo:
             return 1.0
 
 
-   
+def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
+                            control_arm, init_nb, init_choice, variable_mu_choice, n_arms):
+    """
+    Runs a single simulation for a given algorithm instance.
+    Common logic shared between 'adaptive' and 'uniform' modes.
+    """
+    p_values_list = []
+    all_arm_counts = [0 for _ in range(n_arms)]
+    run_pr = []
+
+    # --- Init (adaptive only) ---
+    if mode == 'adaptive' and init_choice == True:
+        if init_nb > 0:
+            data_init = []
+            for arm in range(n_arms):
+                data_init_arm = all_arm_data[no_sim][arm][0:init_nb]
+                data_init.append(data_init_arm)
+            algo.init_process(data_init)
+            all_arm_counts = [init_nb for _ in range(n_arms)]
+
+    # --- Main loop ---
+    for t in range(0, horizon):
+
+        # Select arm
+        if mode == 'adaptive' and variable_mu_choice == True:
+            algo.mu_0 = algo.emp_means[control_arm]
+            arm = algo.select_arm()
+            # we force the draw of the control arm
+            if all_arm_counts[control_arm] < max(all_arm_counts):
+                arm = control_arm
+        else:
+            arm = algo.select_arm()
+
+        if arm == "stop":
+            # If we stop before the end, we fill the lists with the last value
+            # so that arrays have the correct size (horizon)
+            print("stop triggered")
+            
+            remaining_steps = horizon - len(run_pr)
+            
+            # 1. Rattrapage pour run_pr
+            last_pr = run_pr[-1] if run_pr else 0
+            run_pr.extend([last_pr] * remaining_steps)
+
+            # 2. Rattrapage pour counts_evolution
+            last_counts = algo.counts_evolution[-1]
+            for _ in range(remaining_steps):
+                algo.counts_evolution.append(last_counts.copy())
+                
+            # 3. Rattrapage pour p_values_list (LA CORRECTION)
+            # On récupère la dernière liste de p-values calculée (ou on met 1.0 par défaut si vide)
+            last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
+            for _ in range(remaining_steps):
+                # On utilise list() pour créer une copie indépendante à chaque itération
+                p_values_list.append(list(last_p_values))
+
+            break
+
+        else:
+            # Fetch the next pre-generated observation for this specific arm in this simulation
+            len_arm = len(all_arm_data[no_sim][arm])
+            # if we are at the end of the arm we start at zero again
+            if all_arm_counts[arm] >= len_arm:
+                observation = all_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
+                print("arm ended, recicling data for this arm: ", arm)
+            else:
+                observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
+
+            # Increment the local counter so the next pull gets the next value
+            all_arm_counts[arm] += 1
+
+            p_values_t = algo.bh_update_optimized(arm, observation)
+            p_values_list.append(p_values_t)  # register the p value of the iteration t
+
+            # adding the number of arm found as positive in this turn
+            nb_found = len(algo.S_t)
+            current_pr = nb_found
+            run_pr.append(current_pr)  # number of positive in the simulation by draw
+
+    return run_pr, p_values_list
+
+
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice):
     """
     Runs the bandit experiment using pre-generated data for consistency.
@@ -461,8 +542,12 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
     Parameters
     ----------
-    true_means : array-like
-        The true expected values (means) for each arm.
+    arms : array-like
+        The arms of the bandit.
+    mu_0 : float
+        The null hypothesis mean.
+    delta : float
+        The significance level.
     horizon : int
         The total budget (max time steps) for each simulation.
     mode : str
@@ -471,225 +556,99 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         A 3D structure containing pre-generated rewards.
         Shape: [simulation_index][arm_index][pull_count]
         This allows the function to "replay" specific random draws.
-    n_simulations : int, default=20
+    n_simulations : int
         The number of independent runs to execute.
+    control_arm : int
+        Index of the control arm.
+    init_nb : int
+        Number of initial pulls per arm before the main loop.
+    init_choice : bool
+        Whether to use the initialization process.
+    variable_mu_choice : bool
+        Whether to use a variable mu_0 from the empirical mean of the control arm.
 
     Returns
     -------
     pnb_history_mean : ndarray
-        Average True Positive Rate over time.
+        Average number of arms found positive over time.
     pnb_list : list
         History of pr for each individual simulation.
     counts_history_mean : ndarray
         Average pull counts per arm over time.
     counts_list : list
         History of pull counts for each individual simulation.
+    np_p_values_list_by_sim : ndarray
+        P-values for each simulation, arm, and time step.
+    np_p_values_mean : ndarray
+        Average p-values over time.
+    list_positive : list
+        List of positive arms found at the end of each simulation.
     """
     print("EXECUTION RUN EXP")
     n_arms = len(arms)
-    
-    pnb_history_sum = np.zeros(horizon)
+
     pnb_list = []
-    
-    # Store the AVERAGE number of pulls at each time t
+    counts_list = []
+    p_values_list_by_sim = []
+    list_positive = []
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
-    counts_list=[]
-    p_values_list_by_sim=[]
 
+    # --- Algo factory ---
+    algo_factory = {
+        'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta),
+        'uniform':  lambda: UniformAlgo(n_arms, mu_0, delta),
+    }
 
-    print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
-    
-
-    if mode=='adaptive':
-        counts_evolution_sum = np.zeros((horizon + 1 - init_nb, n_arms))
-        for no_sim in tqdm(range(n_simulations)):
-            algo = JamiesonJainAlgo(n_arms, mu_0, delta)
-            p_values_list=[]
-            # Track how many times we have pulled each arm *in this specific simulation*
-            # This is necessary to fetch the correct next value from the pre-generated list.
-            all_arm_counts = [0 for _ in range(n_arms)]
-            run_pr = []
-
-            if init_choice==True: 
-                if init_nb>0:
-                    data_init=[]
-                    for arm in range(n_arms):
-                        data_init_arm=all_arm_data[no_sim][arm][0:init_nb]
-                        data_init.append(data_init_arm)
-                    algo.init_process(data_init)
-                    all_arm_counts = [init_nb for _ in range(n_arms)]
-                else:
-                    init_nb=0
-            
-            for t in range(init_nb, horizon):
-                if variable_mu_choice==True:
-                    algo.mu_0=algo.emp_means[control_arm]
-                    arm = algo.select_arm()
-                    if all_arm_counts[control_arm]<max(all_arm_counts):
-                        # print("pas max")
-                        arm=control_arm
-                else:
-                    arm = algo.select_arm()
-
-                
-                if arm == "stop":
-                    # If we stop before the end, we fill the lists with the last value
-                    # so that arrays have the correct size (horizon)
-                    print("stop triggered")
-                    last_pr = run_pr[-1] if run_pr else 1.0
-                    remaining_steps = horizon - len(run_pr)
-                    run_pr.extend([last_pr] * remaining_steps)
-                    
-                    # For counts, repeat the last known row until the end
-                    last_counts = algo.counts_evolution[-1]
-                    for _ in range(remaining_steps):
-                        algo.counts_evolution.append(last_counts.copy())
-                    break
-                
-                else:
-                    # Fetch the next pre-generated observation for this specific arm in this simulation
-                    observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
-                    # print(mode, "arm:", arm, "count:", all_arm_counts[arm])
-                    # Increment the local counter so the next pull gets the next value
-                    all_arm_counts[arm]+=1
-                    p_values_t=algo.bh_update_optimized(arm, observation)
-                    p_values_list.append(p_values_t) #register the p value of the iteration t in the p_value_list for the simulation no_sim
-                    # print(len(p_values_t))
-
-                    nb_found = len(algo.S_t)
-                    current_pr = nb_found
-                    run_pr.append(current_pr)
-
-            # pr aggregation
-            pnb_i = np.array(run_pr)
-            pnb_list.append(pnb_i)
-            # Counts aggregation (ensure we take the first 'horizon+1' elements)
-            # (horizon + 1 because there is the initial state at t=0)
-            counts_arr = np.array(algo.counts_evolution)[:horizon+1]
-            counts_list.append(counts_arr)
-            counts_evolution_sum += counts_arr
-            # print(len(p_values_list))
-            p_values_list_by_sim.append(p_values_list)    
-        # 1. Trouver la longueur de la simulation la plus longue
-        max_length = max(len(pnb) for pnb in pnb_list)
-        n_sims_total = len(pnb_list)
-        # 2. Créer une matrice vide de la bonne taille (n_simulations x max_length)
-        pnb_matrix = np.zeros((n_sims_total, max_length))
-        # 3. Remplir la matrice
-        for i, pnb_i in enumerate(pnb_list):
-            length = len(pnb_i)
-            # On insère les vraies données de la simulation
-            pnb_matrix[i, :length] = pnb_i
-            # Si la simulation est plus courte que max_length, on répète la dernière valeur
-            if length < max_length:
-                last_val = pnb_i[-1] if length > 0 else 0.0
-                pnb_matrix[i, length:] = last_val
-        # 4. Calculer la moyenne finale proprement
-        pnb_history_mean = np.mean(pnb_matrix, axis=0)
-        counts_history_mean = counts_evolution_sum / n_simulations
-        # np_p_values_list_by_sim=np.array(p_values_list_by_sim)
-        # np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0)
-        # 1. On trouve le nombre maximum d'itérations parmi toutes les simulations
-        max_length = max(len(arr) for arr in p_values_list_by_sim)
-        n_arms = np.array(p_values_list_by_sim[0]).shape[1]
-        n_sims_total = len(p_values_list_by_sim)
-        # 2. On crée une grande matrice 3D vide remplie de NaN (Not a Number)
-        padded_array = np.full((n_sims_total, max_length, n_arms), np.nan)
-        # 3. On insère chaque simulation dans cette matrice
-        for i, arr in enumerate(p_values_list_by_sim):
-            arr_np = np.array(arr)
-            padded_array[i, :arr_np.shape[0], :] = arr_np
-        # 4. On calcule la moyenne en ignorant les "trous" (NaN)
-        np_p_values_mean = np.nanmean(padded_array, axis=0)
-        # Tu peux aussi garder padded_array si tu as besoin de renvoyer la liste complète
-        np_p_values_list_by_sim = padded_array
-
-    elif mode=='uniform':
-        for no_sim in tqdm(range(n_simulations)):
-            algo = UniformAlgo(n_arms, mu_0, delta)
-            p_values_list=[]
-            all_arm_counts = [0 for _ in range(n_arms)]
-            run_pr = []
-            
-            for t in range(horizon):
-                arm = algo.select_arm()
-                
-                if arm == "stop":
-                    # If we stop before the end, we fill the lists with the last value
-                    # so that arrays have the correct size (horizon)
-                    print("stop triggered")
-                    last_pr = run_pr[-1] if run_pr else 1.0
-                    remaining_steps = horizon - len(run_pr)
-                    run_pr.extend([last_pr] * remaining_steps)
-                    
-                    # For counts, repeat the last known row until the end
-                    last_counts = algo.counts_evolution[-1]
-                    for _ in range(remaining_steps):
-                        algo.counts_evolution.append(last_counts.copy())
-                    break
-                
-                else:
-                    # Fetch the next pre-generated observation for this specific arm in this simulation
-                    observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
-                    
-                    # print(mode, "arm:", arm, "count:", all_arm_counts[arm])
-                    
-                    # Increment the local counter so the next pull gets the next value
-                    all_arm_counts[arm]+=1
-                    
-                    p_values_t=algo.bh_update_optimized(arm, observation)
-                    p_values_list.append(p_values_t) #register the p value of the iteration t in the p_value_list for the simulation no_sim
-                    # print(len(p_values_t))
-
-                    nb_found = len(algo.S_t)
-                    current_pr = nb_found
-                    run_pr.append(current_pr)
-
-            # pr aggregation
-            pnb_i = np.array(run_pr)
-            pnb_list.append(pnb_i)
-            # Counts aggregation (ensure we take the first 'horizon+1' elements)
-            # (horizon + 1 because there is the initial state at t=0)
-            counts_arr = np.array(algo.counts_evolution)[:horizon+1]
-            counts_list.append(counts_arr)
-            counts_evolution_sum += counts_arr
-            # print(len(p_values_list))
-            p_values_list_by_sim.append(p_values_list)    
-        # 1. Trouver la longueur de la simulation la plus longue
-        max_length = max(len(pnb) for pnb in pnb_list)
-        n_sims_total = len(pnb_list)
-        # 2. Créer une matrice vide de la bonne taille (n_simulations x max_length)
-        pnb_matrix = np.zeros((n_sims_total, max_length))
-        # 3. Remplir la matrice
-        for i, pnb_i in enumerate(pnb_list):
-            length = len(pnb_i)
-            # On insère les vraies données de la simulation
-            pnb_matrix[i, :length] = pnb_i
-            # Si la simulation est plus courte que max_length, on répète la dernière valeur
-            if length < max_length:
-                last_val = pnb_i[-1] if length > 0 else 0.0
-                pnb_matrix[i, length:] = last_val
-        # 4. Calculer la moyenne finale proprement
-        pnb_history_mean = np.mean(pnb_matrix, axis=0)
-        counts_history_mean = counts_evolution_sum / n_simulations
-        # np_p_values_list_by_sim=np.array(p_values_list_by_sim)
-        # np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0)
-        # 1. On trouve le nombre maximum d'itérations parmi toutes les simulations
-        max_length = max(len(arr) for arr in p_values_list_by_sim)
-        n_arms = np.array(p_values_list_by_sim[0]).shape[1]
-        n_sims_total = len(p_values_list_by_sim)
-        # 2. On crée une grande matrice 3D vide remplie de NaN (Not a Number)
-        padded_array = np.full((n_sims_total, max_length, n_arms), np.nan)
-        # 3. On insère chaque simulation dans cette matrice
-        for i, arr in enumerate(p_values_list_by_sim):
-            arr_np = np.array(arr)
-            padded_array[i, :arr_np.shape[0], :] = arr_np
-        # 4. On calcule la moyenne en ignorant les "trous" (NaN)
-        np_p_values_mean = np.nanmean(padded_array, axis=0)
-        # Tu peux aussi garder padded_array si tu as besoin de renvoyer la liste complète
-        np_p_values_list_by_sim = padded_array
-
-    else:
+    if mode not in algo_factory:
         raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
-        
-    return pnb_history_mean, pnb_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean
+
+    if variable_mu_choice and mode == "adaptive":
+        print(f"Simulation Mode: {mode.upper()} VAR ({n_simulations} runs)")
+    else:
+        print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
+
+    # --- Simulation loop ---
+    for no_sim in tqdm(range(n_simulations)):
+
+        algo = algo_factory[mode]()
+
+        run_pr, p_values_list = _run_single_simulation(
+            algo, no_sim, all_arm_data, horizon, mode,
+            control_arm, init_nb, init_choice, variable_mu_choice, n_arms
+        )
+
+        # save the list of the positive at the end of the simulation
+        list_positive.append(algo.S_t)
+
+        # --- pr aggregation ---
+        pnb_i = np.array(run_pr)
+        pnb_list.append(pnb_i)  # save the number of positive by draw for each simulation
+
+        # --- Counts aggregation ---
+        # (horizon + 1 because there is the initial state at t=0)
+        counts_arr = np.array(algo.counts_evolution)
+        counts_list.append(counts_arr)
+        counts_evolution_sum += counts_arr
+
+        p_values_list_by_sim.append(p_values_list)
+
+    # --- Compute pnb_history_mean ---
+    # Toutes les simulations ont exactement 'horizon' entrées (garantie par le padding dans _run_single_simulation)
+    pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
+    counts_history_mean = counts_evolution_sum / n_simulations
+
+    # --- Compute np_p_values_mean ---
+    # 1. On trouve le nombre maximum d'itérations parmi toutes les simulations
+    max_length = max(len(arr) for arr in p_values_list_by_sim)
+    n_sims_total = len(p_values_list_by_sim)
+    # 2. On crée une grande matrice 3D vide remplie de NaN (Not a Number)
+    padded_array = np.full((n_sims_total, max_length, n_arms), np.nan)
+    # 3. On insère chaque simulation dans cette matrice
+    for i, arr in enumerate(p_values_list_by_sim):
+        arr_np = np.array(arr)
+        padded_array[i, :arr_np.shape[0], :] = arr_np
+    # 4. On calcule la moyenne en ignorant les "trous" (NaN)
+    np_p_values_mean = np.nanmean(padded_array, axis=0)
+    np_p_values_list_by_sim = padded_array
+
+    return pnb_history_mean, pnb_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean, list_positive
