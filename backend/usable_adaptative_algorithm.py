@@ -26,6 +26,7 @@ class JamiesonJainAlgo:
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
+        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
         self.time = 0
         self.S_t = set()
         
@@ -33,7 +34,7 @@ class JamiesonJainAlgo:
         # Initialized with zeros for t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)] # nb of draw of each arms
 
-    def phi(self, t, delta_val):
+    def phi(self, t, delta_val, sigma=1.0):
         """
         Calculates the "Anytime" Confidence Interval width.
         
@@ -46,6 +47,8 @@ class JamiesonJainAlgo:
             Number of times the specific arm has been pulled.
         delta_val : float
             The confidence level (or p-value during BH procedure).
+        sigma : float
+            The estimated standard deviation of the arm's distribution.
 
         Returns
         -------
@@ -64,12 +67,14 @@ class JamiesonJainAlgo:
         # as the logarithmic terms can result in a negative sum.
         num = max(0.0, num)
         
-        return np.sqrt(num / t)
+        return sigma * np.sqrt(num / t)
     
     def init_process(self, data):
         for arm_idx, arm_data in enumerate(data):
             self.emp_means[arm_idx] = mean(arm_data)
             self.counts[arm_idx] = len(arm_data)
+            # Welford M2 = somme des (x_i - mean)^2
+            self.emp_vars[arm_idx] = sum((x - self.emp_means[arm_idx])**2 for x in arm_data)
         self.time = int(np.sum(self.counts))
         self.counts_evolution = [self.counts.copy()]  # remplace le [zeros] initial
 
@@ -102,7 +107,8 @@ class JamiesonJainAlgo:
         selected = candidates[0]
         
         for i in candidates:
-            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta)
+            sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
+            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, sigma)
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -125,8 +131,13 @@ class JamiesonJainAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        n = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + observation) / (n + 1)
+        # Welford update
+        n_pulls = self.counts[arm_idx]
+        old_mean = self.emp_means[arm_idx]
+        self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
+        new_mean = self.emp_means[arm_idx]
+        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
@@ -137,7 +148,8 @@ class JamiesonJainAlgo:
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta)
+                sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
+                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
             if len(passing_arms) >= k:
@@ -160,9 +172,13 @@ class JamiesonJainAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré
+        # 1. Mise à jour des statistiques du bras tiré (Welford)
         n_pulls = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+        old_mean = self.emp_means[arm_idx]
+        self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
+        new_mean = self.emp_means[arm_idx]
+        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
@@ -200,7 +216,7 @@ class JamiesonJainAlgo:
     def get_anytime_pvalue(self, arm_idx):
         """
         Calculates the anytime p-value for a given arm.
-        Solves the equation: emp_mean - phi(count, p) = mu_0
+        Solves the equation: emp_mean - phi(count, p, sigma) = mu_0
 
         Parameters
         ----------
@@ -213,7 +229,7 @@ class JamiesonJainAlgo:
             The calculated anytime p-value.
         """
         t = self.counts[arm_idx]
-        mean = self.emp_means[arm_idx]
+        emp_mean = self.emp_means[arm_idx]
         
         # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
@@ -221,17 +237,20 @@ class JamiesonJainAlgo:
         
         # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
         # The p-value is therefore 1.0
-        diff = mean - self.mu_0
+        diff = emp_mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Function to solve: phi(t, p) - (mean - mu_0) = 0
+        # 3. Estimation de sigma en ligne (Welford)
+        sigma = np.sqrt(self.emp_vars[arm_idx] / t) if t > 1 else 1.0
+
+        # 4. Function to solve: phi(t, p, sigma) - (emp_mean - mu_0) = 0
         # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
             # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
-            return self.phi(t, p) - diff
+            return self.phi(t, p, sigma) - diff
 
         try:
             # Search for p between a very small value (e.g., 1e-12) and 0.9999
@@ -261,6 +280,7 @@ class UniformAlgo:
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
+        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
         self.time = 0
         self.S_t = set()
         
@@ -268,7 +288,7 @@ class UniformAlgo:
         # On initialise avec des zéros pour t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
-    def phi(self, t, delta_val):
+    def phi(self, t, delta_val, sigma=1.0):
         """
         Calculates the "Anytime" Confidence Interval width.
         
@@ -281,6 +301,8 @@ class UniformAlgo:
             Number of times the specific arm has been pulled.
         delta_val : float
             The confidence level (or p-value during BH procedure).
+        sigma : float
+            The estimated standard deviation of the arm's distribution.
 
         Returns
         -------
@@ -299,7 +321,7 @@ class UniformAlgo:
         # as the logarithmic terms can result in a negative sum.
         num = max(0.0, num)
         
-        return np.sqrt(num / t)
+        return sigma * np.sqrt(num / t)
 
     def select_arm(self):
             """
@@ -329,9 +351,13 @@ class UniformAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré
+        # 1. Mise à jour des statistiques du bras tiré (Welford)
         n_pulls = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+        old_mean = self.emp_means[arm_idx]
+        self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
+        new_mean = self.emp_means[arm_idx]
+        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
@@ -382,8 +408,13 @@ class UniformAlgo:
         observation : float
             Observed reward.
         """
-        n = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n + observation) / (n + 1)
+        # Welford update
+        n_pulls = self.counts[arm_idx]
+        old_mean = self.emp_means[arm_idx]
+        self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
+        new_mean = self.emp_means[arm_idx]
+        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
@@ -394,7 +425,8 @@ class UniformAlgo:
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta)
+                sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
+                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
             if len(passing_arms) >= k:
@@ -406,7 +438,7 @@ class UniformAlgo:
     def get_anytime_pvalue(self, arm_idx):
         """
         Calculates the anytime p-value for a given arm.
-        Solves the equation: emp_mean - phi(count, p) = mu_0
+        Solves the equation: emp_mean - phi(count, p, sigma) = mu_0
 
         Parameters
         ----------
@@ -419,7 +451,7 @@ class UniformAlgo:
             The calculated anytime p-value.
         """
         t = self.counts[arm_idx]
-        mean = self.emp_means[arm_idx]
+        emp_mean = self.emp_means[arm_idx]
         
         # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
@@ -427,17 +459,20 @@ class UniformAlgo:
         
         # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
         # The p-value is therefore 1.0
-        diff = mean - self.mu_0
+        diff = emp_mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Function to solve: phi(t, p) - (mean - mu_0) = 0
+        # 3. Estimation de sigma en ligne (Welford)
+        sigma = np.sqrt(self.emp_vars[arm_idx] / t) if t > 1 else 1.0
+
+        # 4. Function to solve: phi(t, p, sigma) - (emp_mean - mu_0) = 0
         # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
             # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
-            return self.phi(t, p) - diff
+            return self.phi(t, p, sigma) - diff
 
         try:
             # Search for p between a very small value (e.g., 1e-12) and 0.9999
@@ -446,7 +481,7 @@ class UniformAlgo:
         except ValueError:
             # If brentq fails (rare edge cases), return 1.0 as a precaution
             return 1.0
-
+        
 
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                             control_arm, init_nb, init_choice, variable_mu_choice, n_arms):

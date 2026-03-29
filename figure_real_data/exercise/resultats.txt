@@ -1,8 +1,8 @@
 List of the positive arm detected
 
    UNIF
-1. set()
+1. {18, 51, 4, 39}
    ADAPT
-1. {33}
+1. set()
    ADAPT VAR
-1. {33, 5, 23}
+1. set()

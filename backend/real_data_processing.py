@@ -180,7 +180,7 @@ if __name__ == "__main__":
 
         mu_0 = 0.0
         delta = 0.05
-        horizon = min_len*8
+        horizon = min_len*10
         n_arms = len(arm_test)
         init_nb = round(min_len*0.01)
         init_choice = True
@@ -197,221 +197,221 @@ if __name__ == "__main__":
                 var_arm = variance(data_test[0][n]) if len(data_test[0][n]) > 1 else 0
                 f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {round(mean_arm, 4)}\n var = {round(var_arm, 4)} \n\n")
             
-    #     # 1. Run Simulations
-    #     pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False)
-    #     pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False)
-    #     pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True)
+        # 1. Run Simulations
+        pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False)
+        pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False)
+        pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True)
 
 
-    #     with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:
-    #         f.write("List of the positive arm detected\n\n")
-    #         f.write("   UNIF\n")
-    #         for i, element in enumerate(l_pos_unif, 1):
-    #             f.write(f"{i}. {element}\n")
-    #         f.write("   ADAPT\n")
-    #         for i, element in enumerate(l_pos_adapt, 1):
-    #             f.write(f"{i}. {element}\n")
-    #         f.write("   ADAPT VAR\n")
-    #         for i, element in enumerate(l_pos_adapt_v, 1):
-    #             f.write(f"{i}. {element}\n")
+        with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:
+            f.write("List of the positive arm detected\n\n")
+            f.write("   UNIF\n")
+            for i, element in enumerate(l_pos_unif, 1):
+                f.write(f"{i}. {element}\n")
+            f.write("   ADAPT\n")
+            for i, element in enumerate(l_pos_adapt, 1):
+                f.write(f"{i}. {element}\n")
+            f.write("   ADAPT VAR\n")
+            for i, element in enumerate(l_pos_adapt_v, 1):
+                f.write(f"{i}. {element}\n")
 
-    #     print("pos unif:", l_pos_unif)
-    #     print("pos adapt:", l_pos_adapt)
-    #     print("pos adapt v:", l_pos_adapt_v)
+        print("pos unif:", l_pos_unif)
+        print("pos adapt:", l_pos_adapt)
+        print("pos adapt v:", l_pos_adapt_v)
 
-    #     # --- PLOT 1: pr ---
-    #     plt.figure(1+num_graph*10, figsize=(10, 5))
-    #     plt.plot(pnb_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-    #     plt.plot(pnb_adapt_v, label='Adaptive_Var', color="#59e244", linewidth=2)    
-    #     plt.plot(pnb_unif, label='Uniform', color='#1f77b4', linestyle='--')
-    #     plt.axhline(y=1.0, color='gray', linestyle=':')
-    #     plt.title("Discovery speed (pr)")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure1.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
+        # --- PLOT 1: pr ---
+        plt.figure(1+num_graph*10, figsize=(10, 5))
+        plt.plot(pnb_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+        plt.plot(pnb_adapt_v, label='Adaptive_Var', color="#59e244", linewidth=2)    
+        plt.plot(pnb_unif, label='Uniform', color='#1f77b4', linestyle='--')
+        plt.axhline(y=1.0, color='gray', linestyle=':')
+        plt.title("Discovery speed (pr)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure1.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
 
-    #     # --- PLOT 2: PULL EVOLUTION ---
-    #     plt.figure(2+num_graph*10, figsize=(12, 6))
+        # --- PLOT 2: PULL EVOLUTION ---
+        plt.figure(2+num_graph*10, figsize=(12, 6))
         
-    #     # Subplot 1: Uniform
-    #     plt.subplot(1, 3, 1)
-    #     plt.title("Uniform: Number of pulls per arm")
-    #     for arm_idx in range(n_arms):
-    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-    #         plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("Number of pulls ($T_i(t)$)")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
+        # Subplot 1: Uniform
+        plt.subplot(1, 3, 1)
+        plt.title("Uniform: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+            plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
         
-    #     # Subplot 2: Adaptive
-    #     plt.subplot(1, 3, 2)
-    #     plt.title("Adaptive: Number of pulls per arm")
-    #     for arm_idx in range(n_arms):
-    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-    #         plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+        # Subplot 2: Adaptive
+        plt.subplot(1, 3, 2)
+        plt.title("Adaptive: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+            plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
         
-    #     # Subplot 3: Adaptive VAR
-    #     plt.subplot(1, 3, 3)
-    #     plt.title("Adaptive VAR: Number of pulls per arm")
-    #     for arm_idx in range(n_arms):
-    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-    #         plt.plot(counts_adapt_v_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+        # Subplot 3: Adaptive VAR
+        plt.subplot(1, 3, 3)
+        plt.title("Adaptive VAR: Number of pulls per arm")
+        for arm_idx in range(n_arms):
+            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+            plt.plot(counts_adapt_v_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
             
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("Number of pulls ($T_i(t)$)")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure2.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure2.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
 
-    #     # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
-    #     plt.figure(3+num_graph*10, figsize=(14, 6))
-    #     plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
+        # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
+        plt.figure(3+num_graph*10, figsize=(14, 6))
+        plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
         
-    #     for arm_idx in range(n_arms):
-    #         color = f'C{arm_idx}' 
-    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+        for arm_idx in range(n_arms):
+            color = f'C{arm_idx}' 
+            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
             
-    #         for sim_counts in counts_adapt_list:
-    #             plt.plot(sim_counts[:, arm_idx], 
-    #                     color=color, 
-    #                     alpha=0.15,
-    #                     linewidth=0.8,
-    #                     linestyle=linestyle)
+            for sim_counts in counts_adapt_list:
+                plt.plot(sim_counts[:, arm_idx], 
+                        color=color, 
+                        alpha=0.15,
+                        linewidth=0.8,
+                        linestyle=linestyle)
 
-    #         plt.plot(counts_adapt_mean[:, arm_idx], 
-    #                 label=label, 
-    #                 color=color, 
-    #                 linewidth=2.5,
-    #                 linestyle=linestyle)
+            plt.plot(counts_adapt_mean[:, arm_idx], 
+                    label=label, 
+                    color=color, 
+                    linewidth=2.5,
+                    linestyle=linestyle)
             
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("Number of pulls ($T_i(t)$)")
-    #     plt.legend(loc='upper left')
-    #     plt.grid(True, alpha=0.3)
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend(loc='upper left')
+        plt.grid(True, alpha=0.3)
         
-    #     print("Displaying plots...")
-    #     plt.tight_layout()
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure3.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
+        print("Displaying plots...")
+        plt.tight_layout()
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-    #     # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
-    #     plt.figure(6+num_graph*10, figsize=(14, 6))
-    #     plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
+        # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
+        plt.figure(6+num_graph*10, figsize=(14, 6))
+        plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
         
-    #     for arm_idx in range(n_arms):
-    #         color = f'C{arm_idx}' 
-    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+        for arm_idx in range(n_arms):
+            color = f'C{arm_idx}' 
+            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
             
-    #         for sim_counts in counts_adapt_v_list:
-    #             plt.plot(sim_counts[:, arm_idx], 
-    #                     color=color, 
-    #                     alpha=0.15,
-    #                     linewidth=0.8,
-    #                     linestyle=linestyle)
+            for sim_counts in counts_adapt_v_list:
+                plt.plot(sim_counts[:, arm_idx], 
+                        color=color, 
+                        alpha=0.15,
+                        linewidth=0.8,
+                        linestyle=linestyle)
 
-    #         plt.plot(counts_adapt_v_mean[:, arm_idx], 
-    #                 label=label, 
-    #                 color=color, 
-    #                 linewidth=2.5,
-    #                 linestyle=linestyle)
+            plt.plot(counts_adapt_v_mean[:, arm_idx], 
+                    label=label, 
+                    color=color, 
+                    linewidth=2.5,
+                    linestyle=linestyle)
             
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("Number of pulls ($T_i(t)$)")
-    #     plt.legend(loc='upper left')
-    #     plt.grid(True, alpha=0.3)
+        plt.xlabel("Time (t)")
+        plt.ylabel("Number of pulls ($T_i(t)$)")
+        plt.legend(loc='upper left')
+        plt.grid(True, alpha=0.3)
         
-    #     print("Displaying plots...")
-    #     plt.tight_layout()
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure3var.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
+        print("Displaying plots...")
+        plt.tight_layout()
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3var.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-    #     # --- PLOT 4: P-VALUES ---
-    #     plt.figure(4+num_graph*10, figsize=(12, 6))
-    #     # Subplot 1: Uniform
-    #     plt.subplot(1, 3, 1)
-    #     plt.title("Uniform: P values by iteration and arm")
-    #     for arm_idx in range(n_arms):
-    #         # print("bc1")
-    #         label = f"Arm {arm_test[arm_idx][0:4]}"
-    #         plt.plot(np_p_value_mean_unif[:, arm_idx], label=label, linewidth=2)
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("P values")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
-    #     # Subplot 2: Adaptative
-    #     plt.subplot(1, 3, 2)
-    #     plt.title("Adaptative: P values by iteration and arm")
-    #     for arm_idx in range(n_arms):
-    #         # print("bc2")
-    #         label = f"Arm {arm_test[arm_idx][0:4]}"
-    #         plt.plot(np_p_value_mean_adapt[:, arm_idx], label=label, linewidth=2)
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("P values")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
-    #     # Subplot 3: Adaptative VAR
-    #     plt.subplot(1, 3, 3)
-    #     plt.title("Adaptative VAR: P values by iteration and arm")
-    #     for arm_idx in range(n_arms):
-    #         # print("bc3")
-    #         label = f"Arm {arm_test[arm_idx][0:4]}"
-    #         plt.plot(np_p_value_mean_adapt_v[:, arm_idx], label=label, linewidth=2)
-    #     plt.xlabel("Time (t)")
-    #     plt.ylabel("P values")
-    #     plt.legend()
-    #     plt.grid(True, alpha=0.3)
+        # --- PLOT 4: P-VALUES ---
+        plt.figure(4+num_graph*10, figsize=(12, 6))
+        # Subplot 1: Uniform
+        plt.subplot(1, 3, 1)
+        plt.title("Uniform: P values by iteration and arm")
+        for arm_idx in range(n_arms):
+            # print("bc1")
+            label = f"Arm {arm_test[arm_idx][0:4]}"
+            plt.plot(np_p_value_mean_unif[:, arm_idx], label=label, linewidth=2)
+        plt.xlabel("Time (t)")
+        plt.ylabel("P values")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        # Subplot 2: Adaptative
+        plt.subplot(1, 3, 2)
+        plt.title("Adaptative: P values by iteration and arm")
+        for arm_idx in range(n_arms):
+            # print("bc2")
+            label = f"Arm {arm_test[arm_idx][0:4]}"
+            plt.plot(np_p_value_mean_adapt[:, arm_idx], label=label, linewidth=2)
+        plt.xlabel("Time (t)")
+        plt.ylabel("P values")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        # Subplot 3: Adaptative VAR
+        plt.subplot(1, 3, 3)
+        plt.title("Adaptative VAR: P values by iteration and arm")
+        for arm_idx in range(n_arms):
+            # print("bc3")
+            label = f"Arm {arm_test[arm_idx][0:4]}"
+            plt.plot(np_p_value_mean_adapt_v[:, arm_idx], label=label, linewidth=2)
+        plt.xlabel("Time (t)")
+        plt.ylabel("P values")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
 
-    #     plt.tight_layout()
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure4.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
+        plt.tight_layout()
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure4.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-    # # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
+    # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
 
-    #     # Définition explicite des couleurs pour chaque algorithme
-    #     color_unif = 'tab:blue'
-    #     color_adapt = 'tab:orange'
-    #     color_adapt_v = 'tab:green'
+        # Définition explicite des couleurs pour chaque algorithme
+        color_unif = 'tab:blue'
+        color_adapt = 'tab:orange'
+        color_adapt_v = 'tab:green'
 
-    #     # Création d'une grille : n_arms (lignes) x 1 (colonne)
-    #     # On réduit un peu la largeur (ex: 10) vu qu'il n'y a plus qu'une seule colonne
-    #     fig, axes = plt.subplots(nrows=n_arms, ncols=1, 
-    #                             figsize=(10, 2.5 * n_arms), 
-    #                             sharex=True)
+        # Création d'une grille : n_arms (lignes) x 1 (colonne)
+        # On réduit un peu la largeur (ex: 10) vu qu'il n'y a plus qu'une seule colonne
+        fig, axes = plt.subplots(nrows=n_arms, ncols=1, 
+                                figsize=(10, 2.5 * n_arms), 
+                                sharex=True)
 
-    #     # Sécurité au cas où il n'y aurait qu'un seul bras (axes ne serait pas une liste)
-    #     if n_arms == 1:
-    #         axes = [axes]
+        # Sécurité au cas où il n'y aurait qu'un seul bras (axes ne serait pas une liste)
+        if n_arms == 1:
+            axes = [axes]
 
-    #     for arm_idx in range(n_arms):
-    #         ax = axes[arm_idx]
-    #         arm_name = arm_test[arm_idx]
+        for arm_idx in range(n_arms):
+            ax = axes[arm_idx]
+            arm_name = arm_test[arm_idx]
             
-    #         # Ajout du titre pour identifier de quel bras on parle sur cette ligne
-    #         ax.set_title(f"P-values evolution for Arm {arm_name}")
+            # Ajout du titre pour identifier de quel bras on parle sur cette ligne
+            ax.set_title(f"P-values evolution for Arm {arm_name}")
 
-    #         # Tracé des 3 trajectoires sur le MÊME graphique
-    #         ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
-    #         ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
-    #         ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
+            # Tracé des 3 trajectoires sur le MÊME graphique
+            ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
+            ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
+            ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
             
-    #         ax.set_ylabel("P value")
-    #         ax.legend(loc="upper right", fontsize="small")
-    #         ax.grid(True, alpha=0.3)
+            ax.set_ylabel("P value")
+            ax.legend(loc="upper right", fontsize="small")
+            ax.grid(True, alpha=0.3)
 
-    #     # Ajout de l'axe des abscisses uniquement sur le tout dernier graphique du bas
-    #     axes[-1].set_xlabel("Time (t)")
+        # Ajout de l'axe des abscisses uniquement sur le tout dernier graphique du bas
+        axes[-1].set_xlabel("Time (t)")
 
-    #     plt.tight_layout()
-    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure5.png", dpi=300, bbox_inches="tight")
-    #     # plt.show()
-    #     num_graph+=1
-    #     plt.close()
+        plt.tight_layout()
+        plt.savefig(git_root / f"figure_real_data/{name_data}/figure5.png", dpi=300, bbox_inches="tight")
+        # plt.show()
+        num_graph+=1
+        plt.close()
