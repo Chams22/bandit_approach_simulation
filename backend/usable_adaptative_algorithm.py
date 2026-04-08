@@ -73,10 +73,21 @@ class JamiesonJainAlgo:
         for arm_idx, arm_data in enumerate(data):
             self.emp_means[arm_idx] = mean(arm_data)
             self.counts[arm_idx] = len(arm_data)
-            # Welford M2 = somme des (x_i - mean)^2
             self.emp_vars[arm_idx] = sum((x - self.emp_means[arm_idx])**2 for x in arm_data)
         self.time = int(np.sum(self.counts))
-        self.counts_evolution = [self.counts.copy()]  # remplace le [zeros] initial
+        self.counts_evolution = [self.counts.copy()]
+        
+        # --- BH après init ---
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        p_values_with_idx.sort(key=lambda x: x[0])
+        for k in range(self.n, 0, -1):
+            if p_values_with_idx[k-1][0] <= self.delta * k / self.n:
+                for rank in range(k):
+                    self.S_t.add(p_values_with_idx[rank][1])
+                break
+        print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
+
+
 
 
 
@@ -148,7 +159,7 @@ class JamiesonJainAlgo:
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
+                sigma = np.sqrt(self.emp_vars[i] / self.counts[i] -1 ) if self.counts[i] > 1 else 1.0
                 lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
@@ -214,52 +225,39 @@ class JamiesonJainAlgo:
         return(p_values)
 
     def get_anytime_pvalue(self, arm_idx):
-        """
-        Calculates the anytime p-value for a given arm.
-        Solves the equation: emp_mean - phi(count, p, sigma) = mu_0
-
-        Parameters
-        ----------
-        arm_idx : int
-            The index of the arm for which to calculate the p-value.
-
-        Returns
-        -------
-        float
-            The calculated anytime p-value.
-        """
         t = self.counts[arm_idx]
         emp_mean = self.emp_means[arm_idx]
         
-        # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
             return 1.0
         
-        # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
-        # The p-value is therefore 1.0
         diff = emp_mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Estimation de sigma en ligne (Welford)
-        sigma = np.sqrt(self.emp_vars[arm_idx] / t) if t > 1 else 1.0
+        sigma = np.sqrt(self.emp_vars[arm_idx] / t -1) if t > 1 else 1.0
 
-        # 4. Function to solve: phi(t, p, sigma) - (emp_mean - mu_0) = 0
-        # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
-            # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
             return self.phi(t, p, sigma) - diff
 
         try:
-            # Search for p between a very small value (e.g., 1e-12) and 0.9999
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # If brentq fails (rare edge cases), return 1.0 as a precaution
-            return 1.0
-
+            # brentq échoue = pas de changement de signe entre les bornes
+            # On vérifie quel cas on est :
+            if objective(1e-12) <= 0:
+                # phi(t, 1e-12, sigma) < diff
+                # → l'évidence dépasse même le bound le plus strict
+                # → p-value extrêmement petite
+                return 1e-15
+            else:
+                # phi(t, 0.9999, sigma) > diff (très rare)
+                # → même le test le plus laxiste ne rejette pas
+                return 1.0
+        
 class UniformAlgo:
     def __init__(self, n_arms, mu_0, delta):
         """
@@ -425,7 +423,7 @@ class UniformAlgo:
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
+                sigma = np.sqrt(self.emp_vars[i] / self.counts[i] -1) if self.counts[i] > 1 else 1.0
                 lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
@@ -436,55 +434,42 @@ class UniformAlgo:
         self.S_t.update(current_St)
 
     def get_anytime_pvalue(self, arm_idx):
-        """
-        Calculates the anytime p-value for a given arm.
-        Solves the equation: emp_mean - phi(count, p, sigma) = mu_0
-
-        Parameters
-        ----------
-        arm_idx : int
-            The index of the arm for which to calculate the p-value.
-
-        Returns
-        -------
-        float
-            The calculated anytime p-value.
-        """
         t = self.counts[arm_idx]
         emp_mean = self.emp_means[arm_idx]
         
-        # 1. If the arm hasn't been played yet, p-value = 1.0 (total uncertainty)
         if t == 0:
             return 1.0
         
-        # 2. If the mean is less than or equal to mu_0, we cannot reject H0 (looking for positive effects)
-        # The p-value is therefore 1.0
         diff = emp_mean - self.mu_0
         if diff <= 0:
             return 1.0
 
-        # 3. Estimation de sigma en ligne (Welford)
-        sigma = np.sqrt(self.emp_vars[arm_idx] / t) if t > 1 else 1.0
+        sigma = np.sqrt(self.emp_vars[arm_idx] / t-1) if t > 1 else 1.0
 
-        # 4. Function to solve: phi(t, p, sigma) - (emp_mean - mu_0) = 0
-        # We look for p such that the confidence interval width equals the distance to mu_0
         def objective(p):
-            # Note: p must not be 0 or 1 to avoid log errors
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
             return self.phi(t, p, sigma) - diff
 
         try:
-            # Search for p between a very small value (e.g., 1e-12) and 0.9999
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # If brentq fails (rare edge cases), return 1.0 as a precaution
-            return 1.0
-        
+            # brentq échoue = pas de changement de signe entre les bornes
+            # On vérifie quel cas on est :
+            if objective(1e-12) <= 0:
+                # phi(t, 1e-12, sigma) < diff
+                # → l'évidence dépasse même le bound le plus strict
+                # → p-value extrêmement petite
+                return 1e-15
+            else:
+                # phi(t, 0.9999, sigma) > diff (très rare)
+                # → même le test le plus laxiste ne rejette pas
+                return 1.0
+            
 
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
-                            control_arm, init_nb, init_choice, variable_mu_choice, n_arms):
+                            control_arm, init_nb, init_choice, variable_mu_choice, n_arms, is_true_mean, true_positives):
     """
     Runs a single simulation for a given algorithm instance.
     Common logic shared between 'adaptive' and 'uniform' modes.
@@ -502,6 +487,8 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 data_init.append(data_init_arm)
             algo.init_process(data_init)
             all_arm_counts = [init_nb for _ in range(n_arms)]
+    
+    
 
     # --- Main loop ---
     for t in range(0, horizon):
@@ -547,6 +534,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             # if we are at the end of the arm we start at zero again
             if all_arm_counts[arm] >= len_arm:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
+                print("time", t, "all_arm_counts[arm]", all_arm_counts[arm], "len_arm", len_arm)
                 print("arm ended, recicling data for this arm: ", arm)
             else:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
@@ -557,15 +545,18 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             p_values_t = algo.bh_update_optimized(arm, observation)
             p_values_list.append(p_values_t)  # register the p value of the iteration t
 
-            # adding the number of arm found as positive in this turn
-            nb_found = len(algo.S_t)
-            current_pr = nb_found
-            run_pr.append(current_pr)  # number of positive in the simulation by draw
-
+            if is_true_mean:
+                nb_found = len(algo.S_t.intersection(true_positives))
+                current_tpr = nb_found / len(true_positives) if true_positives else 1.0
+                run_pr.append(current_tpr)
+            else : 
+                # adding the number of arm found as positive in this turn
+                nb_found = len(algo.S_t)
+                run_pr.append(nb_found)  # number of positive in the simulation by draw
     return run_pr, p_values_list
 
 
-def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice):
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean):
     """
     Runs the bandit experiment using pre-generated data for consistency.
 
@@ -621,6 +612,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     """
     print("EXECUTION RUN EXP")
     n_arms = len(arms)
+    if is_true_mean:
+        true_positives = [i for i, m in enumerate(arms) if m > mu_0]
+    else: 
+        true_positives = None
 
     pnb_list = []
     counts_list = []
@@ -649,7 +644,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
         run_pr, p_values_list = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
-            control_arm, init_nb, init_choice, variable_mu_choice, n_arms
+            control_arm, init_nb, init_choice, variable_mu_choice, n_arms, is_true_mean, true_positives
         )
 
         # save the list of the positive at the end of the simulation
@@ -664,12 +659,11 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         counts_arr = np.array(algo.counts_evolution)
         counts_list.append(counts_arr)
         counts_evolution_sum += counts_arr
-
         p_values_list_by_sim.append(p_values_list)
-
     # --- Compute pnb_history_mean ---
     # Toutes les simulations ont exactement 'horizon' entrées (garantie par le padding dans _run_single_simulation)
     pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
+
     counts_history_mean = counts_evolution_sum / n_simulations
 
     # --- Compute np_p_values_mean ---
@@ -685,5 +679,4 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     # 4. On calcule la moyenne en ignorant les "trous" (NaN)
     np_p_values_mean = np.nanmean(padded_array, axis=0)
     np_p_values_list_by_sim = padded_array
-
     return pnb_history_mean, pnb_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean, list_positive

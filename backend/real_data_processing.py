@@ -186,21 +186,34 @@ if __name__ == "__main__":
         init_choice = True
         mu_0_unif=mean(data_test[0][control_arm])
         print("mu_0 moyenne calcule", mu_0_unif)
+
+        list_stat=[]
         for n in range(n_arms):
-            mean_arm=mean(data_test[0][n])
-            var_arm = variance(data_test[0][n]) if len(data_test[0][n]) > 1 else 0
-            print("moyenne arm", n, ":", arm_test[n], "=", round(mean_arm, 4), "var=", round(var_arm, 4))
+            mean_arm=round(mean(data_test[0][n]), 4)
+            var_arm = round(variance(data_test[0][n]) if len(data_test[0][n]) > 1 else 0, 4)
+            print("moyenne arm", n, ":", arm_test[n], "=", mean_arm, "var=", var_arm)
+            list_stat.append([f"arm {n}", arm_test[n], mean_arm, var_arm])
+
+        
+        sort_mean_desc = sorted(list_stat, key=lambda x: x[2], reverse=True)
+        sort_var_desc = sorted(list_stat, key=lambda x: x[3], reverse=True)
         with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "w", encoding="utf-8") as f:
             f.write("List of the statistics\n\n")
             for n in range(n_arms):
-                mean_arm=mean(data_test[0][n])
-                var_arm = variance(data_test[0][n]) if len(data_test[0][n]) > 1 else 0
-                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {round(mean_arm, 4)}\n var = {round(var_arm, 4)} \n\n")
+                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {list_stat[n][2]}\n var = {list_stat[n][3]} \n")
+            f.write(f"\n\n SORTING BY MEAN \n\n")
+            for n in range(n_arms):
+                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {sort_mean_desc[n][2]}\n var = {sort_mean_desc[n][3]} \n")
+            f.write(f"\n\n SORTING BY VARIANCES \n\n")
+            for n in range(n_arms):
+                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {sort_var_desc[n][2]}\n var = {sort_var_desc[n][3]} \n")
             
+
+        is_true_mean=False
         # 1. Run Simulations
-        pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False)
-        pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False)
-        pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True)
+        pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False, is_true_mean)
+        pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+        pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
 
 
         with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:

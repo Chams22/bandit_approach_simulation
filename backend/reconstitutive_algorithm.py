@@ -623,8 +623,8 @@ if __name__ == "__main__":
     # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
     mu_0 = 0.0
     delta = 0.05
-    horizon = 800
-    n_sims = 100
+    horizon = 700
+    n_sims = 20
     
     true_means = np.array([0.5, 0.5, 0.35, 0.35, 0.0, 0.0])
     n_arms = len(true_means)

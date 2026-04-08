@@ -3,80 +3,188 @@ List of the statistics
 arm nb 0 : 'Beat the flu shot rate in another region (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
  mean = 0.4349
  var = 0.2459 
-
 arm nb 1 : 'Dedicate your flu shot to a loved one (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
  mean = 0.442
  var = 0.2467 
-
 arm nb 2 : 'Don't forget to get a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
  mean = 0.4533
  var = 0.2479 
-
 arm nb 3 : 'Easy health behavior quiz (1 text: 6 pm, 1 d pre-appt) '
  mean = 0.4441
  var = 0.247 
-
 arm nb 4 : 'Flu shot reserved for you (2 texts: 72 hr + 15 m pre-appt) '
  mean = 0.4541
  var = 0.248 
-
 arm nb 5 : 'Flu shot reserved for you (2 texts: 72 hr + 24 hr pre-appt) '
  mean = 0.467
  var = 0.249 
-
 arm nb 6 : 'Getting a flu shot is an easy way to be healthy (1 text: 6 pm, 1 d pre-appt)'
  mean = 0.4276
  var = 0.2449 
-
 arm nb 7 : 'Hard health behavior quiz (1 text: 6 pm, 1 d pre-appt)'
  mean = 0.4521
  var = 0.2478 
-
 arm nb 8 : 'Improve the flu shot rate in your region (2 texts: 6 pm, 3 d + 1 hr pre-appt)'
  mean = 0.4442
  var = 0.247 
-
 arm nb 9 : 'Protect a vulnerable loved one by getting a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
  mean = 0.4386
  var = 0.2463 
-
 arm nb 10 : 'Protect others by getting a flu shot (2 texts: 24 hr + 15 m pre-appt)'
  mean = 0.4346
  var = 0.2458 
-
 arm nb 11 : 'Protect yourself by getting a flu shot (2 texts: 24 hr + 15 m pre-appt) '
  mean = 0.4418
  var = 0.2467 
-
 arm nb 12 : 'Remember to ask for your flu shot (1 text: 6 pm, 1 d pre-appt)'
  mean = 0.4487
  var = 0.2475 
-
 arm nb 13 : 'Reply to receive the flu shot (1 text: 6 pm, 1 d pre-appt)'
  mean = 0.4247
  var = 0.2444 
-
 arm nb 14 : 'Reply to receive the flu shot reserved for you (1 text: 6 pm, 1 d pre-appt) '
  mean = 0.4497
  var = 0.2476 
-
 arm nb 15 : 'Share a joke about the flu (1 text: 6 pm, 1 d pre-appt)'
  mean = 0.4249
  var = 0.2445 
-
 arm nb 16 : 'Usual care control'
  mean = 0.4177
  var = 0.2433 
-
 arm nb 17 : 'Video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt) '
  mean = 0.4555
  var = 0.2481 
-
 arm nb 18 : 'Video about importance of exercise (2 texts: 6 pm, 3 d + 1 d pre-appt)'
  mean = 0.4403
  var = 0.2465 
-
 arm nb 19 : 'Vivid video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt)'
  mean = 0.4401
  var = 0.2465 
 
+
+ SORTING BY MEAN 
+
+arm nb 0 : 'Beat the flu shot rate in another region (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.467
+ var = 0.249 
+arm nb 1 : 'Dedicate your flu shot to a loved one (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.4555
+ var = 0.2481 
+arm nb 2 : 'Don't forget to get a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.4541
+ var = 0.248 
+arm nb 3 : 'Easy health behavior quiz (1 text: 6 pm, 1 d pre-appt) '
+ mean = 0.4533
+ var = 0.2479 
+arm nb 4 : 'Flu shot reserved for you (2 texts: 72 hr + 15 m pre-appt) '
+ mean = 0.4521
+ var = 0.2478 
+arm nb 5 : 'Flu shot reserved for you (2 texts: 72 hr + 24 hr pre-appt) '
+ mean = 0.4497
+ var = 0.2476 
+arm nb 6 : 'Getting a flu shot is an easy way to be healthy (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4487
+ var = 0.2475 
+arm nb 7 : 'Hard health behavior quiz (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4442
+ var = 0.247 
+arm nb 8 : 'Improve the flu shot rate in your region (2 texts: 6 pm, 3 d + 1 hr pre-appt)'
+ mean = 0.4441
+ var = 0.247 
+arm nb 9 : 'Protect a vulnerable loved one by getting a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.442
+ var = 0.2467 
+arm nb 10 : 'Protect others by getting a flu shot (2 texts: 24 hr + 15 m pre-appt)'
+ mean = 0.4418
+ var = 0.2467 
+arm nb 11 : 'Protect yourself by getting a flu shot (2 texts: 24 hr + 15 m pre-appt) '
+ mean = 0.4403
+ var = 0.2465 
+arm nb 12 : 'Remember to ask for your flu shot (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4401
+ var = 0.2465 
+arm nb 13 : 'Reply to receive the flu shot (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4386
+ var = 0.2463 
+arm nb 14 : 'Reply to receive the flu shot reserved for you (1 text: 6 pm, 1 d pre-appt) '
+ mean = 0.4349
+ var = 0.2459 
+arm nb 15 : 'Share a joke about the flu (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4346
+ var = 0.2458 
+arm nb 16 : 'Usual care control'
+ mean = 0.4276
+ var = 0.2449 
+arm nb 17 : 'Video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt) '
+ mean = 0.4249
+ var = 0.2445 
+arm nb 18 : 'Video about importance of exercise (2 texts: 6 pm, 3 d + 1 d pre-appt)'
+ mean = 0.4247
+ var = 0.2444 
+arm nb 19 : 'Vivid video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt)'
+ mean = 0.4177
+ var = 0.2433 
+
+
+ SORTING BY VARIANCES 
+
+arm nb 0 : 'Beat the flu shot rate in another region (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.467
+ var = 0.249 
+arm nb 1 : 'Dedicate your flu shot to a loved one (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.4555
+ var = 0.2481 
+arm nb 2 : 'Don't forget to get a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.4541
+ var = 0.248 
+arm nb 3 : 'Easy health behavior quiz (1 text: 6 pm, 1 d pre-appt) '
+ mean = 0.4533
+ var = 0.2479 
+arm nb 4 : 'Flu shot reserved for you (2 texts: 72 hr + 15 m pre-appt) '
+ mean = 0.4521
+ var = 0.2478 
+arm nb 5 : 'Flu shot reserved for you (2 texts: 72 hr + 24 hr pre-appt) '
+ mean = 0.4497
+ var = 0.2476 
+arm nb 6 : 'Getting a flu shot is an easy way to be healthy (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4487
+ var = 0.2475 
+arm nb 7 : 'Hard health behavior quiz (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4441
+ var = 0.247 
+arm nb 8 : 'Improve the flu shot rate in your region (2 texts: 6 pm, 3 d + 1 hr pre-appt)'
+ mean = 0.4442
+ var = 0.247 
+arm nb 9 : 'Protect a vulnerable loved one by getting a flu shot (2 texts: 6 pm, 3 d + 1 hr pre-appt) '
+ mean = 0.442
+ var = 0.2467 
+arm nb 10 : 'Protect others by getting a flu shot (2 texts: 24 hr + 15 m pre-appt)'
+ mean = 0.4418
+ var = 0.2467 
+arm nb 11 : 'Protect yourself by getting a flu shot (2 texts: 24 hr + 15 m pre-appt) '
+ mean = 0.4403
+ var = 0.2465 
+arm nb 12 : 'Remember to ask for your flu shot (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4401
+ var = 0.2465 
+arm nb 13 : 'Reply to receive the flu shot (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4386
+ var = 0.2463 
+arm nb 14 : 'Reply to receive the flu shot reserved for you (1 text: 6 pm, 1 d pre-appt) '
+ mean = 0.4349
+ var = 0.2459 
+arm nb 15 : 'Share a joke about the flu (1 text: 6 pm, 1 d pre-appt)'
+ mean = 0.4346
+ var = 0.2458 
+arm nb 16 : 'Usual care control'
+ mean = 0.4276
+ var = 0.2449 
+arm nb 17 : 'Video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt) '
+ mean = 0.4249
+ var = 0.2445 
+arm nb 18 : 'Video about importance of exercise (2 texts: 6 pm, 3 d + 1 d pre-appt)'
+ mean = 0.4247
+ var = 0.2444 
+arm nb 19 : 'Vivid video about getting the flu (2 texts: 6 pm, 3 d + 1 d pre-appt)'
+ mean = 0.4177
+ var = 0.2433 

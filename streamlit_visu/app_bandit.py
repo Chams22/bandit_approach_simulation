@@ -4,6 +4,21 @@ import matplotlib.pyplot as plt
 from scipy.optimize import brentq
 import pandas as pd
 import time
+import importlib
+import sys
+import os
+
+# On récupère le chemin absolu du dossier parent (bandit_approach_simulation)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
+
+# On l'ajoute aux chemins que Python connaît
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
+# Maintenant l'import direct de backend fonctionnera
+from backend import usable_adaptative_algorithm
+importlib.reload(usable_adaptative_algorithm)
 
 # Configuration de la page
 st.set_page_config(
@@ -16,148 +31,148 @@ st.set_page_config(
 # PART 1: LES ALGORITHMES
 # -----------------------------------------------------------------------------
 
-class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta):
-        self.n = n_arms
-        self.mu_0 = mu_0
-        self.delta = delta
+# class JamiesonJainAlgo:
+#     def __init__(self, n_arms, mu_0, delta):
+#         self.n = n_arms
+#         self.mu_0 = mu_0
+#         self.delta = delta
 
-        self.counts = np.zeros(n_arms, dtype=int)
-        self.emp_means = np.zeros(n_arms, dtype=float)
-        self.time = 0
-        self.S_t = set()
-        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+#         self.counts = np.zeros(n_arms, dtype=int)
+#         self.emp_means = np.zeros(n_arms, dtype=float)
+#         self.time = 0
+#         self.S_t = set()
+#         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
-    def phi(self, t, delta_val):
-        if t == 0:
-            return float('inf')
-        num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
-              3 * np.log(np.log(np.e * t / 2) + 1e-10)
-        num = max(0.0, num)
-        return np.sqrt(num / t)
+#     def phi(self, t, delta_val):
+#         if t == 0:
+#             return float('inf')
+#         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
+#               3 * np.log(np.log(np.e * t / 2) + 1e-10)
+#         num = max(0.0, num)
+#         return np.sqrt(num / t)
 
-    def select_arm(self):
-        if self.time < self.n:
-            return self.time
-        candidates = [i for i in range(self.n) if i not in self.S_t]
-        if not candidates:
-            return "stop"
-        best_ucb = -float('inf')
-        selected = candidates[0]
-        for i in candidates:
-            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta)
-            if ucb > best_ucb:
-                best_ucb = ucb
-                selected = i
-        return selected
+#     def select_arm(self):
+#         if self.time < self.n:
+#             return self.time
+#         candidates = [i for i in range(self.n) if i not in self.S_t]
+#         if not candidates:
+#             return "stop"
+#         best_ucb = -float('inf')
+#         selected = candidates[0]
+#         for i in candidates:
+#             ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta)
+#             if ucb > best_ucb:
+#                 best_ucb = ucb
+#                 selected = i
+#         return selected
 
-    def get_anytime_pvalue(self, arm_idx):
-        t = self.counts[arm_idx]
-        mean = self.emp_means[arm_idx]
-        if t == 0 or mean <= self.mu_0:
-            return 1.0
-        diff = mean - self.mu_0
+#     def get_anytime_pvalue(self, arm_idx):
+#         t = self.counts[arm_idx]
+#         mean = self.emp_means[arm_idx]
+#         if t == 0 or mean <= self.mu_0:
+#             return 1.0
+#         diff = mean - self.mu_0
 
-        def objective(p):
-            if p <= 0: return float('inf')
-            if p >= 1: return -float('inf')
-            return self.phi(t, p) - diff
+#         def objective(p):
+#             if p <= 0: return float('inf')
+#             if p >= 1: return -float('inf')
+#             return self.phi(t, p) - diff
 
-        try:
-            p_value = brentq(objective, 1e-12, 0.9999)
-            return p_value
-        except ValueError:
-            return 1.0
+#         try:
+#             p_value = brentq(objective, 1e-12, 0.9999)
+#             return p_value
+#         except ValueError:
+#             return 1.0
 
-    def bh_update_optimized(self, arm_idx, observation):
-        n_pulls = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
-        self.counts[arm_idx] += 1
-        self.time += 1
-        self.counts_evolution.append(self.counts.copy())
+#     def bh_update_optimized(self, arm_idx, observation):
+#         n_pulls = self.counts[arm_idx]
+#         self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+#         self.counts[arm_idx] += 1
+#         self.time += 1
+#         self.counts_evolution.append(self.counts.copy())
 
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values_with_idx.sort(key=lambda x: x[0])
+#         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+#         p_values_with_idx.sort(key=lambda x: x[0])
 
-        current_St = set()
-        for k in range(self.n, 0, -1):
-            p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
-            if p_val_k <= effective_delta:
-                for rank in range(k):
-                    current_St.add(p_values_with_idx[rank][1])
-                break
-        self.S_t.update(current_St)
+#         current_St = set()
+#         for k in range(self.n, 0, -1):
+#             p_val_k = p_values_with_idx[k - 1][0]
+#             effective_delta = self.delta * k / self.n
+#             if p_val_k <= effective_delta:
+#                 for rank in range(k):
+#                     current_St.add(p_values_with_idx[rank][1])
+#                 break
+#         self.S_t.update(current_St)
 
-        # Retourner les p-values dans l'ordre des bras (0, 1, 2, ...)
-        p_values_ordered = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
-        return p_values_ordered
+#         # Retourner les p-values dans l'ordre des bras (0, 1, 2, ...)
+#         p_values_ordered = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+#         return p_values_ordered
 
 
-class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta):
-        self.n = n_arms
-        self.mu_0 = mu_0
-        self.delta = delta
+# class UniformAlgo:
+#     def __init__(self, n_arms, mu_0, delta):
+#         self.n = n_arms
+#         self.mu_0 = mu_0
+#         self.delta = delta
 
-        self.counts = np.zeros(n_arms, dtype=int)
-        self.emp_means = np.zeros(n_arms, dtype=float)
-        self.time = 0
-        self.S_t = set()
-        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+#         self.counts = np.zeros(n_arms, dtype=int)
+#         self.emp_means = np.zeros(n_arms, dtype=float)
+#         self.time = 0
+#         self.S_t = set()
+#         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
-    def phi(self, t, delta_val):
-        if t == 0:
-            return float('inf')
-        num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
-              3 * np.log(np.log(np.e * t / 2) + 1e-10)
-        num = max(0.0, num)
-        return np.sqrt(num / t)
+#     def phi(self, t, delta_val):
+#         if t == 0:
+#             return float('inf')
+#         num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
+#               3 * np.log(np.log(np.e * t / 2) + 1e-10)
+#         num = max(0.0, num)
+#         return np.sqrt(num / t)
 
-    def select_arm(self):
-        return np.random.randint(self.n)
+#     def select_arm(self):
+#         return np.random.randint(self.n)
 
-    def get_anytime_pvalue(self, arm_idx):
-        t = self.counts[arm_idx]
-        mean = self.emp_means[arm_idx]
-        if t == 0 or mean <= self.mu_0:
-            return 1.0
-        diff = mean - self.mu_0
+#     def get_anytime_pvalue(self, arm_idx):
+#         t = self.counts[arm_idx]
+#         mean = self.emp_means[arm_idx]
+#         if t == 0 or mean <= self.mu_0:
+#             return 1.0
+#         diff = mean - self.mu_0
 
-        def objective(p):
-            if p <= 0: return float('inf')
-            if p >= 1: return -float('inf')
-            return self.phi(t, p) - diff
+#         def objective(p):
+#             if p <= 0: return float('inf')
+#             if p >= 1: return -float('inf')
+#             return self.phi(t, p) - diff
 
-        try:
-            p_value = brentq(objective, 1e-12, 0.9999)
-            return p_value
-        except ValueError:
-            return 1.0
+#         try:
+#             p_value = brentq(objective, 1e-12, 0.9999)
+#             return p_value
+#         except ValueError:
+#             return 1.0
 
-    def bh_update_optimized(self, arm_idx, observation):
-        n_pulls = self.counts[arm_idx]
-        self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
-        self.counts[arm_idx] += 1
-        self.time += 1
-        self.counts_evolution.append(self.counts.copy())
+#     def bh_update_optimized(self, arm_idx, observation):
+#         n_pulls = self.counts[arm_idx]
+#         self.emp_means[arm_idx] = (self.emp_means[arm_idx] * n_pulls + observation) / (n_pulls + 1)
+#         self.counts[arm_idx] += 1
+#         self.time += 1
+#         self.counts_evolution.append(self.counts.copy())
 
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values_with_idx.sort(key=lambda x: x[0])
+#         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+#         p_values_with_idx.sort(key=lambda x: x[0])
 
-        current_St = set()
-        for k in range(self.n, 0, -1):
-            p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
-            if p_val_k <= effective_delta:
-                for rank in range(k):
-                    current_St.add(p_values_with_idx[rank][1])
-                break
-        self.S_t.update(current_St)
+#         current_St = set()
+#         for k in range(self.n, 0, -1):
+#             p_val_k = p_values_with_idx[k - 1][0]
+#             effective_delta = self.delta * k / self.n
+#             if p_val_k <= effective_delta:
+#                 for rank in range(k):
+#                     current_St.add(p_values_with_idx[rank][1])
+#                 break
+#         self.S_t.update(current_St)
 
-        # Retourner les p-values dans l'ordre des bras (0, 1, 2, ...)
-        p_values_ordered = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
-        return p_values_ordered
+#         # Retourner les p-values dans l'ordre des bras (0, 1, 2, ...)
+#         p_values_ordered = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+#         return p_values_ordered
 
 
 # -----------------------------------------------------------------------------
@@ -189,98 +204,98 @@ def prepare_experiment(true_means, horizon, n_sims, scale):
     return all_arm_data_by_sim
 
 
-def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20, mu_0=0.0):
-    """
-    Runs the bandit experiment using pre-generated data for consistency.
+# def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20, mu_0=0.0):
+#     """
+#     Runs the bandit experiment using pre-generated data for consistency.
 
-    Parameters
-    ----------
-    true_means : array-like
-    horizon : int
-    mode : str — 'adaptive' or 'uniform'
-    all_arm_data : list[sim][arm][pull]
-    n_simulations : int
-    mu_0 : float
+#     Parameters
+#     ----------
+#     true_means : array-like
+#     horizon : int
+#     mode : str — 'adaptive' or 'uniform'
+#     all_arm_data : list[sim][arm][pull]
+#     n_simulations : int
+#     mu_0 : float
 
-    Returns
-    -------
-    tpr_history_mean, tpr_list, counts_history_mean, counts_list,
-    np_p_values_list_by_sim, np_p_values_mean
-    """
-    n_arms = len(true_means)
-    true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
+#     Returns
+#     -------
+#     tpr_history_mean, tpr_list, counts_history_mean, counts_list,
+#     np_p_values_list_by_sim, np_p_values_mean
+#     """
+#     n_arms = len(true_means)
+#     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
 
-    tpr_history_sum = np.zeros(horizon)
-    tpr_list = []
-    counts_evolution_sum = np.zeros((horizon + 1, n_arms))
-    counts_list = []
-    p_values_list_by_sim = []
+#     tpr_history_sum = np.zeros(horizon)
+#     tpr_list = []
+#     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
+#     counts_list = []
+#     p_values_list_by_sim = []
 
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+#     progress_bar = st.progress(0)
+#     status_text = st.empty()
 
-    for no_sim in range(n_simulations):
-        p_values_list = []
-        all_arm_counts = [0 for _ in range(n_arms)]
+#     for no_sim in range(n_simulations):
+#         p_values_list = []
+#         all_arm_counts = [0 for _ in range(n_arms)]
 
-        if mode == 'adaptive':
-            algo = JamiesonJainAlgo(n_arms, mu_0, delta)
-        elif mode == 'uniform':
-            algo = UniformAlgo(n_arms, mu_0, delta)
-        else:
-            raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
+#         if mode == 'adaptive':
+#             algo = JamiesonJainAlgo(n_arms, mu_0, delta)
+#         elif mode == 'uniform':
+#             algo = UniformAlgo(n_arms, mu_0, delta)
+#         else:
+#             raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
 
-        run_tpr = []
+#         run_tpr = []
 
-        for t in range(horizon):
-            arm = algo.select_arm()
+#         for t in range(horizon):
+#             arm = algo.select_arm()
 
-            if arm == "stop":
-                last_tpr = run_tpr[-1] if run_tpr else 1.0
-                last_pvals = p_values_list[-1] if p_values_list else [1.0] * n_arms
-                remaining_steps = horizon - len(run_tpr)
-                run_tpr.extend([last_tpr] * remaining_steps)
-                p_values_list.extend([last_pvals] * remaining_steps)
-                last_counts = algo.counts_evolution[-1]
-                for _ in range(remaining_steps):
-                    algo.counts_evolution.append(last_counts.copy())
-                break
+#             if arm == "stop":
+#                 last_tpr = run_tpr[-1] if run_tpr else 1.0
+#                 last_pvals = p_values_list[-1] if p_values_list else [1.0] * n_arms
+#                 remaining_steps = horizon - len(run_tpr)
+#                 run_tpr.extend([last_tpr] * remaining_steps)
+#                 p_values_list.extend([last_pvals] * remaining_steps)
+#                 last_counts = algo.counts_evolution[-1]
+#                 for _ in range(remaining_steps):
+#                     algo.counts_evolution.append(last_counts.copy())
+#                 break
 
-            else:
-                observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
-                all_arm_counts[arm] += 1
+#             else:
+#                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
+#                 all_arm_counts[arm] += 1
 
-                p_values_t = algo.bh_update_optimized(arm, observation)
-                p_values_list.append(p_values_t)
+#                 p_values_t = algo.bh_update_optimized(arm, observation)
+#                 p_values_list.append(p_values_t)
 
-                nb_found = len(algo.S_t.intersection(true_positives))
-                current_tpr = nb_found / len(true_positives) if true_positives else 1.0
-                run_tpr.append(current_tpr)
+#                 nb_found = len(algo.S_t.intersection(true_positives))
+#                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
+#                 run_tpr.append(current_tpr)
 
-        tpr_i = np.array(run_tpr)
-        tpr_list.append(tpr_i)
-        tpr_history_sum += tpr_i
+#         tpr_i = np.array(run_tpr)
+#         tpr_list.append(tpr_i)
+#         tpr_history_sum += tpr_i
 
-        counts_arr = np.array(algo.counts_evolution)[:horizon+1]
-        counts_list.append(counts_arr)
-        counts_evolution_sum += counts_arr
-        p_values_list_by_sim.append(p_values_list)
+#         counts_arr = np.array(algo.counts_evolution)[:horizon+1]
+#         counts_list.append(counts_arr)
+#         counts_evolution_sum += counts_arr
+#         p_values_list_by_sim.append(p_values_list)
 
-        progress_bar.progress((no_sim + 1) / n_simulations)
-        status_text.text(f"Simulations {mode}: {no_sim + 1}/{n_simulations}")
+#         progress_bar.progress((no_sim + 1) / n_simulations)
+#         status_text.text(f"Simulations {mode}: {no_sim + 1}/{n_simulations}")
 
-    tpr_history_mean = tpr_history_sum / n_simulations
-    counts_history_mean = counts_evolution_sum / n_simulations
+#     tpr_history_mean = tpr_history_sum / n_simulations
+#     counts_history_mean = counts_evolution_sum / n_simulations
 
-    np_p_values_list_by_sim = np.array(p_values_list_by_sim)    # shape: (n_sims, horizon, n_arms)
-    np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0) # shape: (horizon, n_arms)
+#     np_p_values_list_by_sim = np.array(p_values_list_by_sim)    # shape: (n_sims, horizon, n_arms)
+#     np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0) # shape: (horizon, n_arms)
 
-    status_text.text(f"Simulations {mode} terminées!")
-    time.sleep(0.5)
-    status_text.empty()
-    progress_bar.empty()
+#     status_text.text(f"Simulations {mode} terminées!")
+#     time.sleep(0.5)
+#     status_text.empty()
+#     progress_bar.empty()
 
-    return tpr_history_mean, tpr_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean
+#     return tpr_history_mean, tpr_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean
 
 
 # -----------------------------------------------------------------------------
@@ -449,16 +464,17 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Paramètres de simulation")
 
-    n_sims = st.slider("Nombre de simulations", 10, 500, 100, 10)
+    n_sims = st.slider("Nombre de simulations", 10, 500, 50, 10)
     horizon = st.slider("Horizon (T)", 100, 2000, 800, 50)
     sigma = st.slider("Bruit (σ)", 0.1, 3.0, 1.0, 0.1)
     delta = st.slider("Paramètre δ (FDR)", 0.01, 0.5, 0.05, 0.01)
     mu_0 = st.number_input("Seuil μ₀", value=0.0, step=0.1)
+    init_nb= st.slider("Nombre initial de tirage par bras", 0, 100, 10, 10)
 
     st.markdown("---")
     st.header("Configuration des bras")
 
-    n_arms = st.number_input("Nombre de bras", min_value=2, max_value=10, value=6, step=1)
+    n_arms = st.number_input("Nombre de bras", min_value=2, max_value=10, value=3, step=1)
 
     st.subheader("Moyennes des bras")
     true_means = []
@@ -467,7 +483,7 @@ with st.sidebar:
         with cols[i % 2]:
             mean = st.number_input(
                 f"Bras {i}",
-                value=0.5 if i < 2 else (0.35 if i < 4 else 0.0),
+                value=0.5 if i < 1 else (0.35 if i < 2 else 0.0),
                 step=0.05, key=f"mean_{i}", format="%.2f"
             )
             true_means.append(mean)
@@ -482,18 +498,26 @@ with st.sidebar:
 
 if run_button:
     with st.spinner("Préparation des données..."):
-        all_arm_data = prepare_experiment(true_means, horizon, n_sims, sigma)
+        all_arm_data = prepare_experiment(true_means, horizon + init_nb, n_sims, sigma)
 
     col1, col2 = st.columns(2)
+    control_arm=0 # indice du bras control , donc rajouter dans le streamlit le choix du bras control
+    init_choice=True
     with col1:
         st.info("Simulation Uniforme en cours...")
-        tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif, _, pvalues_unif_mean = run_experiment(
-            true_means, horizon, 'uniform', all_arm_data, n_sims, mu_0)
+        # tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif, _, pvalues_unif_mean = run_experiment(
+        #     true_means, horizon, 'uniform', all_arm_data, n_sims, mu_0)
+        (tpr_unif, tpr_list_unif, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = usable_adaptative_algorithm.run_experiment(
+            true_means, 0, delta, horizon + init_nb, 'uniform', all_arm_data, n_sims, control_arm, 0, False, False, True)
+        
 
     with col2:
         st.info("Simulation Adaptive en cours...")
-        tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, _, pvalues_adapt_mean = run_experiment(
-            true_means, horizon, 'adaptive', all_arm_data, n_sims, mu_0)
+        # tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, _, pvalues_adapt_mean = run_experiment(
+        #     true_means, horizon, 'adaptive', all_arm_data, n_sims, mu_0)
+        (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = usable_adaptative_algorithm.run_experiment(
+            true_means, 0, delta, horizon, 'adaptive', all_arm_data, n_sims, control_arm, init_nb, init_choice, False, True)
+
 
     st.success("✅ Simulations terminées avec succès!")
 
@@ -572,7 +596,7 @@ if run_button:
 
     with tab4:
         st.subheader("Analyse des intervalles de confiance")
-        demo_algo = UniformAlgo(n_arms, mu_0, delta)
+        demo_algo = usable_adaptative_algorithm.UniformAlgo(n_arms, mu_0, delta)
         demo_algo.counts = counts_adapt_mean[-1].astype(int)
         demo_algo.emp_means = np.array([counts_adapt_mean[-1][i] / horizon if counts_adapt_mean[-1][i] > 0 else 0
                                         for i in range(n_arms)])
