@@ -1,6 +1,5 @@
 import numpy as np
 from tqdm import tqdm
-from scipy.optimize import brentq
 from statistics import mean
 
 # -----------------------------------------------------------------------------
@@ -34,12 +33,12 @@ class JamiesonJainAlgo:
         # Initialized with zeros for t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)] # nb of draw of each arms
 
-    def phi(self, t, delta_val, sigma=1.0):
+    def phi(self, t, delta_val, V_hat, rho=1.0):
         """
-        Calculates the "Anytime" Confidence Interval width.
-        
-        This bound is based on the Law of the Iterated Logarithm (LIL), 
-        ensuring the confidence interval remains valid at all time steps.
+        Normal Mixture confidence sequence radius (Howard et al., 2021).
+
+        Valid for unbounded data with unknown variance. Uses the running
+        sum of squared prediction errors V_hat (computed via Welford).
 
         Parameters
         ----------
@@ -47,28 +46,25 @@ class JamiesonJainAlgo:
             Number of times the specific arm has been pulled.
         delta_val : float
             The confidence level (or p-value during BH procedure).
-        sigma : float
-            The estimated standard deviation of the arm's distribution.
+        V_hat : float
+            Running sum of squared prediction errors: sum of (X_i - X_bar_{i-1})^2.
+        rho : float
+            Tuning parameter (prior variance). Acts as a floor on interval
+            width at small t. Default: 1.0.
 
         Returns
         -------
         float
-            The width of the confidence interval.
+            The confidence radius phi_NM.
         """
-        if t == 0: 
+        if t == 0:
             return float('inf')
-        
-        # Calculate the numerator based on the LIL concentration inequality
-        num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
-              3 * np.log(np.log(np.e * t / 2) + 1e-10)
-              
-        # SAFETY FIX: Prevent the numerator from becoming negative.
-        # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
-        # as the logarithmic terms can result in a negative sum.
-        num = max(0.0, num)
-        
-        return sigma * np.sqrt(num / t)
-    
+
+        log_term = np.log(np.sqrt((V_hat + rho) / rho) / delta_val)
+        log_term = max(0.0, log_term)
+
+        return np.sqrt(2 * (V_hat + rho) * log_term) / t
+
     def init_process(self, data):
         for arm_idx, arm_data in enumerate(data):
             self.emp_means[arm_idx] = mean(arm_data)
@@ -118,8 +114,7 @@ class JamiesonJainAlgo:
         selected = candidates[0]
         
         for i in candidates:
-            sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
-            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, sigma)
+            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -142,29 +137,25 @@ class JamiesonJainAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # Welford update
+        # Welford update (V_hat = sum of squared prediction errors)
         n_pulls = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
-        new_mean = self.emp_means[arm_idx]
-        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
-        
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
+
         self.counts[arm_idx] += 1
         self.time += 1
-        self.counts_evolution.append(self.counts.copy()) 
-        
-        k_hat = 0
+        self.counts_evolution.append(self.counts.copy())
+
         current_St = set()
         for k in range(self.n, 0, -1):
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / self.counts[i] -1 ) if self.counts[i] > 1 else 1.0
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
+                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, self.emp_vars[i])
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
             if len(passing_arms) >= k:
-                k_hat = k
                 current_St = set(passing_arms)
                 break
         self.S_t.update(current_St)
@@ -183,80 +174,57 @@ class JamiesonJainAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré (Welford)
+        # 1. Welford update (V_hat = sum of squared prediction errors)
         n_pulls = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
-        new_mean = self.emp_means[arm_idx]
-        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
         self.counts[arm_idx] += 1
         self.time += 1
-        self.counts_evolution.append(self.counts.copy()) 
-        
-        # 2. Calcul des p-values anytime pour tous les bras
-        # On stocke des tuples : (p_value, index_du_bras)
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
+        self.counts_evolution.append(self.counts.copy())
 
-        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
+        # 2. Calcul des p-values NM en forme fermée — O(n) sans brentq
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        p_values = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+
+        # 3. Tri des p-values — O(n log n)
         p_values_with_idx.sort(key=lambda x: x[0])
-        
-        # 4. Procédure de Benjamini-Hochberg classique
-        # On cherche le plus grand k tel que p_(k) <= delta * k / n
+
+        # 4. Procédure de Benjamini-Hochberg
         current_St = set()
-        
         for k in range(self.n, 0, -1):
-            # Attention : les listes Python commencent à l'index 0
-            # Le k-ième élément est donc à l'index k - 1
             p_val_k = p_values_with_idx[k - 1][0]
             effective_delta = self.delta * k / self.n
-            
-            # Dès qu'on trouve le plus grand k qui valide la condition
             if p_val_k <= effective_delta:
-                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
                 for rank in range(k):
-                    discovered_arm_idx = p_values_with_idx[rank][1]
-                    current_St.add(discovered_arm_idx)
-                break # On a trouvé le max k, on arrête la boucle
-                
-        # 5. Mise à jour de l'ensemble global des découvertes
-        self.S_t.update(current_St)
-        return(p_values)
+                    current_St.add(p_values_with_idx[rank][1])
+                break
 
-    def get_anytime_pvalue(self, arm_idx):
+        # 5. Mise à jour de S_t
+        self.S_t.update(current_St)
+        return p_values
+
+    def get_anytime_pvalue(self, arm_idx, rho=1.0):
+        """
+        Closed-form anytime p-value from the Normal Mixture confidence sequence.
+
+        Derived by inverting phi_NM = diff analytically:
+            p_NM = sqrt((V_hat + rho) / rho) * exp(-diff^2 * t / (2 * (V_hat + rho)))
+
+        Complexity: O(1) — no numerical root-finding needed.
+        """
         t = self.counts[arm_idx]
-        emp_mean = self.emp_means[arm_idx]
-        
         if t == 0:
             return 1.0
-        
-        diff = emp_mean - self.mu_0
+
+        diff = self.emp_means[arm_idx] - self.mu_0
         if diff <= 0:
             return 1.0
 
-        sigma = np.sqrt(self.emp_vars[arm_idx] / t -1) if t > 1 else 1.0
-
-        def objective(p):
-            if p <= 0: return float('inf') 
-            if p >= 1: return -float('inf')
-            return self.phi(t, p, sigma) - diff
-
-        try:
-            p_value = brentq(objective, 1e-12, 0.9999)
-            return p_value
-        except ValueError:
-            # brentq échoue = pas de changement de signe entre les bornes
-            # On vérifie quel cas on est :
-            if objective(1e-12) <= 0:
-                # phi(t, 1e-12, sigma) < diff
-                # → l'évidence dépasse même le bound le plus strict
-                # → p-value extrêmement petite
-                return 1e-15
-            else:
-                # phi(t, 0.9999, sigma) > diff (très rare)
-                # → même le test le plus laxiste ne rejette pas
-                return 1.0
+        V_hat = self.emp_vars[arm_idx]
+        p_value = np.sqrt((V_hat + rho) / rho) * np.exp(-diff ** 2 * t ** 2 / (2 * (V_hat + rho)))
+        return float(np.clip(p_value, 1e-300, 1.0))
         
 class UniformAlgo:
     def __init__(self, n_arms, mu_0, delta):
@@ -286,12 +254,9 @@ class UniformAlgo:
         # On initialise avec des zéros pour t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
-    def phi(self, t, delta_val, sigma=1.0):
+    def phi(self, t, delta_val, V_hat, rho=1.0):
         """
-        Calculates the "Anytime" Confidence Interval width.
-        
-        This bound is based on the Law of the Iterated Logarithm (LIL), 
-        ensuring the confidence interval remains valid at all time steps.
+        Normal Mixture confidence sequence radius (Howard et al., 2021).
 
         Parameters
         ----------
@@ -299,27 +264,23 @@ class UniformAlgo:
             Number of times the specific arm has been pulled.
         delta_val : float
             The confidence level (or p-value during BH procedure).
-        sigma : float
-            The estimated standard deviation of the arm's distribution.
+        V_hat : float
+            Running sum of squared prediction errors: sum of (X_i - X_bar_{i-1})^2.
+        rho : float
+            Tuning parameter (prior variance). Default: 1.0.
 
         Returns
         -------
         float
-            The width of the confidence interval.
+            The confidence radius phi_NM.
         """
-        if t == 0: 
+        if t == 0:
             return float('inf')
-        
-        # Calculate the numerator based on the LIL concentration inequality
-        num = 2 * np.log(1/delta_val) + 6 * np.log(np.log(1/delta_val) + 1e-10) + \
-              3 * np.log(np.log(np.e * t / 2) + 1e-10)
-              
-        # SAFETY FIX: Prevent the numerator from becoming negative.
-        # This occurs when delta_val approaches 1.0 (e.g., during p-value root-finding),
-        # as the logarithmic terms can result in a negative sum.
-        num = max(0.0, num)
-        
-        return sigma * np.sqrt(num / t)
+
+        log_term = np.log(np.sqrt((V_hat + rho) / rho) / delta_val)
+        log_term = max(0.0, log_term)
+
+        return np.sqrt(2 * (V_hat + rho) * log_term) / t
 
     def select_arm(self):
             """
@@ -349,123 +310,57 @@ class UniformAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré (Welford)
+        # 1. Welford update (V_hat = sum of squared prediction errors)
         n_pulls = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
-        new_mean = self.emp_means[arm_idx]
-        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
         self.counts[arm_idx] += 1
         self.time += 1
-        self.counts_evolution.append(self.counts.copy()) 
-        
-        # 2. Calcul des p-values anytime pour tous les bras
-        # On stocke des tuples : (p_value, index_du_bras)
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
+        self.counts_evolution.append(self.counts.copy())
 
-        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
+        # 2. Calcul des p-values NM en forme fermée — O(n) sans brentq
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        p_values = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+
+        # 3. Tri des p-values — O(n log n)
         p_values_with_idx.sort(key=lambda x: x[0])
-        
-        # 4. Procédure de Benjamini-Hochberg classique
-        # On cherche le plus grand k tel que p_(k) <= delta * k / n
+
+        # 4. Procédure de Benjamini-Hochberg
         current_St = set()
-        
         for k in range(self.n, 0, -1):
-            # Attention : les listes Python commencent à l'index 0
-            # Le k-ième élément est donc à l'index k - 1
             p_val_k = p_values_with_idx[k - 1][0]
             effective_delta = self.delta * k / self.n
-            
-            # Dès qu'on trouve le plus grand k qui valide la condition
             if p_val_k <= effective_delta:
-                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
                 for rank in range(k):
-                    discovered_arm_idx = p_values_with_idx[rank][1]
-                    current_St.add(discovered_arm_idx)
-                break # On a trouvé le max k, on arrête la boucle
-                
-        # 5. Mise à jour de l'ensemble global des découvertes
-        self.S_t.update(current_St)
-        return(p_values)
-
-    def bh_update(self, arm_idx, observation):
-        """
-        Updates the state and checks for discoveries.
-        
-        Note:
-        Although the sampling is uniform (dumb), the update/inference rule is 
-        intelligent and identical to the adaptive algorithm (Benjamini-Hochberg 
-        with Anytime bounds) to ensure a fair comparison of False Discovery Rate control.
-        
-        Parameters
-        ----------
-        arm_idx : int
-            Index of the pulled arm.
-        observation : float
-            Observed reward.
-        """
-        # Welford update
-        n_pulls = self.counts[arm_idx]
-        old_mean = self.emp_means[arm_idx]
-        self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
-        new_mean = self.emp_means[arm_idx]
-        self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
-        
-        self.counts[arm_idx] += 1
-        self.time += 1
-        self.counts_evolution.append(self.counts.copy()) 
-        
-        k_hat = 0
-        current_St = set()
-        for k in range(self.n, 0, -1):
-            effective_delta = self.delta * k / self.n
-            passing_arms = []
-            for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / self.counts[i] -1) if self.counts[i] > 1 else 1.0
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
-                if lcb >= self.mu_0:
-                    passing_arms.append(i)
-            if len(passing_arms) >= k:
-                k_hat = k
-                current_St = set(passing_arms)
+                    current_St.add(p_values_with_idx[rank][1])
                 break
-        self.S_t.update(current_St)
 
-    def get_anytime_pvalue(self, arm_idx):
+        # 5. Mise à jour de S_t
+        self.S_t.update(current_St)
+        return p_values
+
+    def get_anytime_pvalue(self, arm_idx, rho=1.0):
+        """
+        Closed-form anytime p-value from the Normal Mixture confidence sequence.
+
+        Derived by inverting phi_NM = diff analytically:
+            p_NM = sqrt((V_hat + rho) / rho) * exp(-diff^2 * t / (2 * (V_hat + rho)))
+
+        Complexity: O(1) — no numerical root-finding needed.
+        """
         t = self.counts[arm_idx]
-        emp_mean = self.emp_means[arm_idx]
-        
         if t == 0:
             return 1.0
-        
-        diff = emp_mean - self.mu_0
+
+        diff = self.emp_means[arm_idx] - self.mu_0
         if diff <= 0:
             return 1.0
 
-        sigma = np.sqrt(self.emp_vars[arm_idx] / t-1) if t > 1 else 1.0
-
-        def objective(p):
-            if p <= 0: return float('inf') 
-            if p >= 1: return -float('inf')
-            return self.phi(t, p, sigma) - diff
-
-        try:
-            p_value = brentq(objective, 1e-12, 0.9999)
-            return p_value
-        except ValueError:
-            # brentq échoue = pas de changement de signe entre les bornes
-            # On vérifie quel cas on est :
-            if objective(1e-12) <= 0:
-                # phi(t, 1e-12, sigma) < diff
-                # → l'évidence dépasse même le bound le plus strict
-                # → p-value extrêmement petite
-                return 1e-15
-            else:
-                # phi(t, 0.9999, sigma) > diff (très rare)
-                # → même le test le plus laxiste ne rejette pas
-                return 1.0
+        V_hat = self.emp_vars[arm_idx]
+        p_value = np.sqrt((V_hat + rho) / rho) * np.exp(-diff ** 2 * t ** 2 / (2 * (V_hat + rho)))
+        return float(np.clip(p_value, 1e-300, 1.0))
             
 
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
