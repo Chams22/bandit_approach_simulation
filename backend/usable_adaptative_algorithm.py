@@ -210,7 +210,7 @@ class JamiesonJainAlgo:
         Closed-form anytime p-value from the Normal Mixture confidence sequence.
 
         Derived by inverting phi_NM = diff analytically:
-            p_NM = sqrt((V_hat + rho) / rho) * exp(-diff^2 * t / (2 * (V_hat + rho)))
+            p_NM = sqrt((V_hat + rho) / rho) * exp(-diff^2 * t ** 2 / (2 * (V_hat + rho)))
 
         Complexity: O(1) — no numerical root-finding needed.
         """
@@ -428,7 +428,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             len_arm = len(all_arm_data[no_sim][arm])
             # if we are at the end of the arm we start at zero again
             if all_arm_counts[arm] >= len_arm:
-                observation = all_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
+                observation = coall_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
                 print("time", t, "all_arm_counts[arm]", all_arm_counts[arm], "len_arm", len_arm)
                 print("arm ended, recicling data for this arm: ", arm)
             else:
