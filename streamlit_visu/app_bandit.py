@@ -229,7 +229,7 @@ def prepare_experiment(true_means, horizon, n_sims, scale, dist_type):
                 result_arm = np.random.binomial(n=1, p=p, size=horizon).tolist()
             
             all_arm_data.append(result_arm)
-
+        all_arm_data_by_sim.append(all_arm_data)
         progress_bar.progress((sim + 1) / n_sims)
         status_text.text(f"Préparation ({dist_type}): {sim + 1}/{n_sims} simulations")
 
@@ -547,7 +547,10 @@ with st.sidebar:
 if run_button:
     with st.spinner("Préparation des données..."):
         all_arm_data = prepare_experiment(true_means, horizon + init_nb, n_sims, sigma, dist_type)
-
+        safe_horizon = horizon + (init_nb * n_arms) + 100 
+        
+        all_arm_data = prepare_experiment(true_means, safe_horizon, n_sims, sigma, dist_type)
+        
     col1, col2 = st.columns(2)
     control_arm=0 # indice du bras control , donc rajouter dans le streamlit le choix du bras control
     init_choice=True

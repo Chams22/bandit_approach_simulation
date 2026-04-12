@@ -95,7 +95,8 @@ def get_min_max_samples(all_arm_data):
 
     return min_len, max_len
 
-
+import scipy.stats as stats
+from statsmodels.stats.proportion import proportion_confint
 
 # -----------------------------------------------------------------------------
 # PART 3: CONFIGURATION AND EXECUTION
@@ -165,6 +166,7 @@ if __name__ == "__main__":
     # name_data="effort"
     # name_data="walmart"
     # name_data="exercise"
+    
     list_name=["penn", "exercise", "effort", "walmart"]
     num_graph=0
     for name_data in list_name:
@@ -192,7 +194,7 @@ if __name__ == "__main__":
             mean_arm=round(mean(data_test[0][n]), 4)
             var_arm = round(variance(data_test[0][n]) if len(data_test[0][n]) > 1 else 0, 4)
             print("moyenne arm", n, ":", arm_test[n], "=", mean_arm, "var=", var_arm)
-            list_stat.append([f"arm {n}", arm_test[n], mean_arm, var_arm])
+            list_stat.append([f"arm {n}", arm_test[n], mean_arm, var_arm, len(data_test[0][n])])
 
         
         sort_mean_desc = sorted(list_stat, key=lambda x: x[2], reverse=True)
@@ -200,231 +202,579 @@ if __name__ == "__main__":
         with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "w", encoding="utf-8") as f:
             f.write("List of the statistics\n\n")
             for n in range(n_arms):
-                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {list_stat[n][2]}\n var = {list_stat[n][3]} \n")
+                f.write(f"arm nb {n} : '{list_stat[n][1]}'\n mean = {list_stat[n][2]}\n var = {list_stat[n][3]} \n n = {list_stat[n][4]} \n")
             f.write(f"\n\n SORTING BY MEAN \n\n")
             for n in range(n_arms):
-                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {sort_mean_desc[n][2]}\n var = {sort_mean_desc[n][3]} \n")
+                f.write(f"arm nb {n} : '{sort_mean_desc[n][1]}'\n mean = {sort_mean_desc[n][2]}\n var = {sort_mean_desc[n][3]} \n n = {sort_mean_desc[n][4]} \n")
             f.write(f"\n\n SORTING BY VARIANCES \n\n")
             for n in range(n_arms):
-                f.write(f"arm nb {n} : '{arm_test[n]}'\n mean = {sort_var_desc[n][2]}\n var = {sort_var_desc[n][3]} \n")
+                f.write(f"arm nb {n} : '{sort_var_desc[n][1]}'\n mean = {sort_var_desc[n][2]}\n var = {sort_var_desc[n][3]} \n n = {sort_var_desc[n][4]} \n")
+
+
+        # ==========================================
+        # ANALYSE STATISTIQUE
+        # ==========================================
+        # Choisissez "normal" pour des scores continus (0 à 10)
+        # Choisissez "bernouilli" pour du binaire (Douleur absente/présente)
+        if name_data in ["penn", "walmart"]:
+            type_de_loi = "bernouilli"
+        else : 
+            type_de_loi = "normal"
+
+        print(f"--- ANALYSE LANCÉE (TYPE DE DONNÉES : {type_de_loi.upper()}) ---\n")
+
+        arm_test_clean = [f"{i}: {arm_test[i][:15]}" for i in range(len(arm_test))]
+        liste_vrai_positif=[]
+
+        if type_de_loi == "normal":
+            donnees = data_test[0]
+            noms_traitements = arm_test_clean[:control_arm]+arm_test_clean[control_arm+1:]
+            noms_tous_groupes = arm_test_clean
+            groupe_controle = donnees[control_arm]
+            groupes_traitements = donnees[:control_arm]+donnees[control_arm+1:]
+
+            # --- TESTS STATISTIQUES ---
+            stat_f, p_value_anova = stats.f_oneway(*donnees)
+            print("=== ÉTAPE 1 : TEST GLOBAL (ANOVA) ===")
+            print(f"P-value de l'ANOVA : {p_value_anova:.5f}")
+
+            # Dunnett toujours calculé (utilisé aussi pour le graphe)
+            res_dunnett = stats.dunnett(*groupes_traitements, control=groupe_controle)
+
+            # Mapping : indice original du bras → p-value Dunnett
+            indices_traitements = [i for i in range(n_arms) if i != control_arm]
+            dunnett_pvals = dict(zip(indices_traitements, res_dunnett.pvalue))
+            liste_vrai_positif = [idx for idx, p_val in dunnett_pvals.items() if p_val < 0.05]
+
+
+            if p_value_anova < 0.05:
+                print("-> Résultat significatif.\n")
+                print("=== ÉTAPE 2 : TESTS POST-HOC (Test de Dunnett) ===")
+                for i, p_val in enumerate(res_dunnett.pvalue):
+                    nom = noms_traitements[i]
+                    moyenne_traitement = np.mean(groupes_traitements[i])
+                    moyenne_controle = np.mean(groupe_controle)
+                    significatif = "Oui" if p_val < 0.05 else "Non"
+                    effet = "Baisse" if moyenne_traitement < moyenne_controle else "Hausse"
+                    print(f"Contrôle vs {nom} | P-value = {p_val:.4f} | Significatif : {significatif} ({effet})")
+            else:
+                print("-> Résultat non significatif.")
+
+            # --- VISUALISATION ---
+            means = [np.mean(d) for d in donnees]
+            cis = [stats.sem(d) * 1.96 for d in donnees]
+            n_obs = [len(d) for d in donnees]
+            labels_courts = [nom[:25] + "…" if len(nom) > 25 else nom for nom in noms_tous_groupes]
+
+            ordre = sorted(range(n_arms), key=lambda i: means[i])
+            means_tri = [means[i] for i in ordre]
+            cis_tri = [cis[i] for i in ordre]
+            n_obs_tri = [n_obs[i] for i in ordre]
+            labels_tri = [labels_courts[i] for i in ordre]
+
+            # Couleurs basées sur Dunnett
+            sig_flags = []
+            for idx_orig in ordre:
+                if idx_orig == control_arm:
+                    sig_flags.append('control')
+                else:
+                    p_val = dunnett_pvals[idx_orig]
+                    sig_flags.append('sig' if p_val < 0.05 else 'ns')
+
+            couleurs = []
+            for flag in sig_flags:
+                if flag == 'control':
+                    couleurs.append('#ff6b6b')
+                elif flag == 'sig':
+                    couleurs.append('#8de5a1')
+                else:
+                    couleurs.append('#a1c9f4')
+
+            fig, ax = plt.subplots(figsize=(10, max(6, n_arms * 0.35)))
+            y_pos = range(n_arms)
+
+            ax.barh(y_pos, means_tri, xerr=cis_tri, color=couleurs,
+                    edgecolor='black', capsize=3, zorder=2, height=0.6)
+            ax.axvline(x=means[control_arm], color='red', linestyle='--',
+                       label=f'Moyenne contrôle ({means[control_arm]:.2f})')
+
+            # Annotations avec Dunnett
+            for idx_tri, idx_orig in enumerate(ordre):
+                m = means_tri[idx_tri]
+                ci = cis_tri[idx_tri]
+                n = n_obs_tri[idx_tri]
+
+                if idx_orig == control_arm:
+                    label = f'{m:.2f}  (n={n})'
+                else:
+                    p_val = dunnett_pvals[idx_orig]
+                    sig = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else ''
+                    label = f'{m:.2f}  (n={n}) {sig}'
+
+                ax.text(m + ci + 0.01 * max(means), idx_tri, label,
+                        va='center', fontsize=7)
+
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(labels_tri, fontsize=8)
+            ax.set_xlabel("Moyenne ± IC 95%")
+            ax.set_title(f"Comparaison des bras : {name_data}\n"
+                        "ANOVA + post-hoc Dunnett | IC 95% (moyenne ± 1.96×SEM)",
+                        fontsize=14, fontweight='bold')
+            ax.legend(loc='lower right')
+            ax.grid(axis='x', linestyle='--', alpha=0.7, zorder=1)
+
+            ax.text(0.99, 0.02, '* p<0.05  ** p<0.01  *** p<0.001 (Dunnett)',
+                    transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
+
+            plt.tight_layout()
+            plt.savefig(git_root / f"figure_real_data/{name_data}/figure0.png", dpi=300, bbox_inches="tight")
+            plt.close()
+        elif type_de_loi == "bernouilli":
+            # ==========================================
+            # CAS 1 : DONNÉES BINAIRES (penn et walmart = incitation à prendre un vaccin)
+            # ==========================================
+            # --- TRANSFORMATION DES DONNÉES ---
+            tableau_contingence = []
+            indices_valides = []
+            for idx, bras in enumerate(data_test[0]):
+                absents = bras.count(0)
+                presents = bras.count(1)
+                if absents > 0 and presents > 0:
+                    tableau_contingence.append([absents, presents])
+                    indices_valides.append(idx)
+                else:
+                    print(f"⚠️  Bras {idx} ('{arm_test_clean[idx]}') ignoré : "
+                        f"données constantes ({absents} absents, {presents} présents)")
+
+            # Recalculer l'index du contrôle dans le tableau filtré
+            if control_arm in indices_valides:
+                control_arm_filtre = indices_valides.index(control_arm)
+            else:
+                print("⚠️  Le bras de contrôle a été filtré !")
+                control_arm_filtre = 0
+
+            noms_tous_groupes = [arm_test_clean[i] for i in indices_valides]
+            noms_traitements = [arm_test_clean[i] for i in indices_valides if i != control_arm]
+
+            # --- TESTS STATISTIQUES ---
+            stat_chi2, p_val_globale, dof, expected = stats.chi2_contingency(tableau_contingence)
+            print("=== ÉTAPE 1 : TEST GLOBAL (Chi-deux) ===")
+            print(f"P-value globale : {p_val_globale:.5f}")
+
+            if p_val_globale < 0.05:
+                print("-> Résultat significatif.\n")
+                print("=== ÉTAPE 2 : TESTS POST-HOC (Fisher exact + Bonferroni) ===")
+
+                ligne_controle = tableau_contingence[control_arm_filtre]
+                lignes_traitements = (tableau_contingence[:control_arm_filtre]
+                                    + tableau_contingence[control_arm_filtre+1:])
+                nombre_de_comparaisons = len(lignes_traitements)
+
+                for i, ligne_traitement in enumerate(lignes_traitements):
+                    nom = noms_traitements[i]
+                    sous_tableau = [ligne_controle, ligne_traitement]
+
+                    stat_odds, p_val_brute = stats.fisher_exact(sous_tableau)
+                    p_val_corrigee = min(p_val_brute * nombre_de_comparaisons, 1.0)
+
+                    total_controle = sum(ligne_controle)
+                    total_trait = sum(ligne_traitement)
+                    pct_controle = (ligne_controle[0] / total_controle) * 100 if total_controle > 0 else 0
+                    pct_trait = (ligne_traitement[0] / total_trait) * 100 if total_trait > 0 else 0
+
+                    significatif = "Oui" if p_val_corrigee < 0.05 else "Non"
+                    print(f"Contrôle ({pct_controle:.0f}%) vs {nom} ({pct_trait:.0f}%) "
+                        f"| P-val = {p_val_corrigee:.4f} | Significatif : {significatif}")
+            else:
+                print("-> Résultat non significatif.")
+#           # --- VISUALISATION ENRICHIE ---
+            proportions = [ligne[1] / sum(ligne) for ligne in tableau_contingence]
+            n_obs = [sum(ligne) for ligne in tableau_contingence]
+            prop_controle = proportions[control_arm_filtre]
+
+            # IC 95% (Wilson, plus fiable que Wald pour les proportions)
+            cis = []
+            for p, n in zip(proportions, n_obs):
+                ci = proportion_confint(round(p * n), n, alpha=0.05, method='wilson')
+                cis.append((p - ci[0], ci[1] - p))  # erreur basse, erreur haute
+
+            labels_courts = [nom[:25] + "…" if len(nom) > 25 else nom for nom in noms_tous_groupes]
+            # Pré-calcul de la significativité pour les couleurs
+            sig_flags = []
+            for i in range(len(proportions)):
+                if i == control_arm_filtre:
+                    sig_flags.append('control')
+                else:
+                    sous_tableau = [tableau_contingence[control_arm_filtre],
+                                   tableau_contingence[i]]
+                    _, p_val = stats.fisher_exact(sous_tableau)
+                    p_val_corr = min(p_val * (len(proportions) - 1), 1.0)
+                    sig_flags.append('sig' if p_val_corr < 0.05 else 'ns')
+            liste_vrai_positif = [indices_valides[i] for i, flag in enumerate(sig_flags) if flag == 'sig']
+
+            couleurs = []
+            for flag in sig_flags:
+                if flag == 'control':
+                    couleurs.append('#ff6b6b')
+                elif flag == 'sig':
+                    couleurs.append('#8de5a1')
+                else:
+                    couleurs.append('#a1c9f4')
+            fig, ax = plt.subplots(figsize=(10, max(6, len(proportions) * 0.4)))
+            y_pos = range(len(proportions))
+
+            ax.barh(y_pos, proportions,
+                    xerr=list(zip(*cis)),  # asymétrique (bas, haut)
+                    color=couleurs, edgecolor='black', capsize=3, zorder=2, height=0.6)
+
+            ax.axvline(x=prop_controle, color='red', linestyle='--',
+                       label=f'Contrôle ({prop_controle:.1%})')
             
+            # Annotation : proportion + n + significativité
+            for i, (p, n) in enumerate(zip(proportions, n_obs)):
+                if sig_flags[i] == 'control':
+                    label = f'{p:.1%}  (n={n})'
+                else:
+                    sous_tableau = [tableau_contingence[control_arm_filtre],
+                                   tableau_contingence[i]]
+                    _, p_val = stats.fisher_exact(sous_tableau)
+                    p_val_corr = min(p_val * (len(proportions) - 1), 1.0)
+                    sig = '***' if p_val_corr < 0.001 else '**' if p_val_corr < 0.01 else '*' if p_val_corr < 0.05 else ''
+                    label = f'{p:.1%}  (n={n}) {sig}'
 
-        is_true_mean=False
-        # 1. Run Simulations
-        pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False, is_true_mean)
-        pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-        pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+                ax.text(p + cis[i][1] + 0.005, i, label, va='center', fontsize=8)
 
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(labels_courts, fontsize=8)
+            ax.set_xlabel("Proportion de succès ± IC 95%")
+            ax.set_title(f"Proportion de succès par traitement : {name_data}\n"
+             "Chi-deux + post-hoc Fisher exact (Bonferroni) | IC 95% Wilson",
+             fontsize=14, fontweight='bold')    
+            ax.legend(loc='lower right')
+            ax.grid(axis='x', linestyle='--', alpha=0.7, zorder=1)
 
-        with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:
-            f.write("List of the positive arm detected\n\n")
-            f.write("   UNIF\n")
-            for i, element in enumerate(l_pos_unif, 1):
-                f.write(f"{i}. {element}\n")
-            f.write("   ADAPT\n")
-            for i, element in enumerate(l_pos_adapt, 1):
-                f.write(f"{i}. {element}\n")
-            f.write("   ADAPT VAR\n")
-            for i, element in enumerate(l_pos_adapt_v, 1):
-                f.write(f"{i}. {element}\n")
+            # Légende des étoiles
+            ax.text(0.99, 0.02, '* p<0.05  ** p<0.01  *** p<0.001 (Fisher + Bonferroni)',
+                    transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
-        print("pos unif:", l_pos_unif)
-        print("pos adapt:", l_pos_adapt)
-        print("pos adapt v:", l_pos_adapt_v)
+            plt.tight_layout()
+            plt.savefig(git_root / f"figure_real_data/{name_data}/figure0.png", dpi=300, bbox_inches="tight")
+            plt.close()
+        else:
+            print("Erreur : La variable 'type_de_loi' doit être strictement égale à 'normal' ou 'bernouilli'.")            
 
-        # --- PLOT 1: pr ---
-        plt.figure(1+num_graph*10, figsize=(10, 5))
-        plt.plot(pnb_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-        plt.plot(pnb_adapt_v, label='Adaptive_Var', color="#59e244", linewidth=2)    
-        plt.plot(pnb_unif, label='Uniform', color='#1f77b4', linestyle='--')
-        plt.axhline(y=1.0, color='gray', linestyle=':')
-        plt.title("Discovery speed (pr)")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure1.png", dpi=300, bbox_inches="tight")
-        plt.close()
+        with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "r", encoding="utf-8") as f:
+            contenu_existant = f.read()
+        with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "w", encoding="utf-8") as f:
+            f.write(str(liste_vrai_positif) + contenu_existant)
 
-
-        # --- PLOT 2: PULL EVOLUTION ---
-        plt.figure(2+num_graph*10, figsize=(12, 6))
         
-        # Subplot 1: Uniform
-        plt.subplot(1, 3, 1)
-        plt.title("Uniform: Number of pulls per arm")
-        for arm_idx in range(n_arms):
-            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-            plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
-        plt.xlabel("Time (t)")
-        plt.ylabel("Number of pulls ($T_i(t)$)")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        # is_true_mean=False
+        # # 1. Run Simulations
+        # pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, 0, False, False, is_true_mean)
+        # pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+        # pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+
+
+        # with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:
+        #     f.write("List of the positive arm detected\n\n")
+        #     f.write("   UNIF\n")
+        #     for i, element in enumerate(l_pos_unif, 1):
+        #         f.write(f"{i}. {element}\n")
+        #     f.write("   ADAPT\n")
+        #     for i, element in enumerate(l_pos_adapt, 1):
+        #         f.write(f"{i}. {element}\n")
+        #     f.write("   ADAPT VAR\n")
+        #     for i, element in enumerate(l_pos_adapt_v, 1):
+        #         f.write(f"{i}. {element}\n")
+
+        # print("pos unif:", l_pos_unif)
+        # print("pos adapt:", l_pos_adapt)
+        # print("pos adapt v:", l_pos_adapt_v)
+
         
-        # Subplot 2: Adaptive
-        plt.subplot(1, 3, 2)
-        plt.title("Adaptive: Number of pulls per arm")
-        for arm_idx in range(n_arms):
-            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-            plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+        import re
+
+        with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "r", encoding="utf-8") as f:
+            contenu = f.read()
+
+        # Regex : capture le nom de la méthode et le contenu entre {}
+        pattern = r'(UNIF|ADAPT VAR|ADAPT)\s+\d+\.\s+\{([^}]+)\}'
+        matches = re.findall(pattern, contenu)
+        print(matches)
+
+        resultats = {}
+        print(matches)
+        if matches:
+            for nom, nombres in matches:
+                resultats[nom] = set(int(x.strip()) for x in nombres.split(','))
+
+        liste_unif = resultats.get('UNIF', set())
+        liste_adapt = resultats.get('ADAPT', set())
+        liste_adapt_var = resultats.get('ADAPT VAR', set())
+
+        def plot_detection_comparison(vrais_positifs, detectes_list, tous_les_bras, arm_names, name_data):
+            """
+            vrais_positifs : liste d'indices
+            detectes_list : [(set_indices, "nom_mode"), ...]
+            """
+            from matplotlib.patches import Patch
+
+            n_modes = len(detectes_list)
+            fig, axes = plt.subplots(1, n_modes, figsize=(6 * n_modes, max(6, len(tous_les_bras) * 0.35)),
+                                     sharey=True)
+            if n_modes == 1:
+                axes = [axes]
+
+            couleurs_map = {
+                'TP (bien détecté)': '#8de5a1',
+                'FP (faux positif)': '#ff6b6b',
+                'FN (manqué)': '#ffb347',
+                'TN (correct)': '#a1c9f4'
+            }
+            labels = [nom[:25] + "…" if len(nom) > 25 else nom for nom in arm_names]
+            y_pos = range(len(tous_les_bras))
+
+            for ax, (detectes, mode) in zip(axes, detectes_list):
+                categories = []
+                for i in tous_les_bras:
+                    if i in vrais_positifs and i in detectes:
+                        categories.append('TP (bien détecté)')
+                    elif i not in vrais_positifs and i in detectes:
+                        categories.append('FP (faux positif)')
+                    elif i in vrais_positifs and i not in detectes:
+                        categories.append('FN (manqué)')
+                    else:
+                        categories.append('TN (correct)')
+
+                couleurs = [couleurs_map[c] for c in categories]
+                ax.barh(y_pos, [1]*len(tous_les_bras), color=couleurs, edgecolor='black', height=0.6)
+
+                for i, cat in enumerate(categories):
+                    ax.text(0.5, i, cat, ha='center', va='center', fontsize=7, fontweight='bold')
+
+                ax.set_xlim(0, 1)
+                ax.set_xticks([])
+                ax.set_title(mode.upper(), fontsize=12, fontweight='bold')
+
+                n_tp = categories.count('TP (bien détecté)')
+                n_fp = categories.count('FP (faux positif)')
+                n_fn = categories.count('FN (manqué)')
+                precision = f'{n_tp/(n_tp+n_fp):.0%}' if (n_tp+n_fp) > 0 else 'N/A'
+                rappel = f'{n_tp/(n_tp+n_fn):.0%}' if (n_tp+n_fn) > 0 else 'N/A'
+                ax.text(0.5, -0.05, f'TP={n_tp} FP={n_fp} FN={n_fn}\n'
+                        f'Préc={precision} Rap={rappel}',
+                        transform=ax.transAxes, fontsize=8, ha='center', style='italic', color='gray')
+
+            axes[0].set_yticks(y_pos)
+            axes[0].set_yticklabels(labels, fontsize=8)
+
+            legend = [Patch(facecolor=c, edgecolor='black', label=l) for l, c in couleurs_map.items()]
+            fig.legend(handles=legend, loc='lower center', ncol=4, fontsize=8,
+                       bbox_to_anchor=(0.5, -0.02))
+
+            fig.suptitle(f"Détection des bras significatifs : {name_data}", fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig(git_root / f"figure_real_data/{name_data}/figure6.png", dpi=300, bbox_inches="tight")
+            plt.close()
+
+        # Appel
+        detectes_list = [(liste_unif, "unif"), (liste_adapt, "adapt"), (liste_adapt_var, "adapt var")]
+        plot_detection_comparison(liste_vrai_positif, detectes_list, range(len(arm_test)), arm_test_clean, name_data)
+
+    #     # --- PLOT 1: pr ---
+    #     plt.figure(1+num_graph*10, figsize=(10, 5))
+    #     plt.plot(pnb_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
+    #     plt.plot(pnb_adapt_v, label='Adaptive_Var', color="#59e244", linewidth=2)    
+    #     plt.plot(pnb_unif, label='Uniform', color='#1f77b4', linestyle='--')
+    #     plt.axhline(y=1.0, color='gray', linestyle=':')
+    #     plt.title("Discovery speed (pr)")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure1.png", dpi=300, bbox_inches="tight")
+    #     plt.close()
+
+
+    #     # --- PLOT 2: PULL EVOLUTION ---
+    #     plt.figure(2+num_graph*10, figsize=(12, 6))
         
-        # Subplot 3: Adaptive VAR
-        plt.subplot(1, 3, 3)
-        plt.title("Adaptive VAR: Number of pulls per arm")
-        for arm_idx in range(n_arms):
-            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-            plt.plot(counts_adapt_v_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
-            
-        plt.xlabel("Time (t)")
-        plt.ylabel("Number of pulls ($T_i(t)$)")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure2.png", dpi=300, bbox_inches="tight")
-        plt.close()
-
-
-        # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
-        plt.figure(3+num_graph*10, figsize=(14, 6))
-        plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
+    #     # Subplot 1: Uniform
+    #     plt.subplot(1, 3, 1)
+    #     plt.title("Uniform: Number of pulls per arm")
+    #     for arm_idx in range(n_arms):
+    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+    #         plt.plot(counts_unif_mean[:, arm_idx], label=label, linewidth=2)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("Number of pulls ($T_i(t)$)")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
         
-        for arm_idx in range(n_arms):
-            color = f'C{arm_idx}' 
-            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
-            
-            for sim_counts in counts_adapt_list:
-                plt.plot(sim_counts[:, arm_idx], 
-                        color=color, 
-                        alpha=0.15,
-                        linewidth=0.8,
-                        linestyle=linestyle)
-
-            plt.plot(counts_adapt_mean[:, arm_idx], 
-                    label=label, 
-                    color=color, 
-                    linewidth=2.5,
-                    linestyle=linestyle)
-            
-        plt.xlabel("Time (t)")
-        plt.ylabel("Number of pulls ($T_i(t)$)")
-        plt.legend(loc='upper left')
-        plt.grid(True, alpha=0.3)
+    #     # Subplot 2: Adaptive
+    #     plt.subplot(1, 3, 2)
+    #     plt.title("Adaptive: Number of pulls per arm")
+    #     for arm_idx in range(n_arms):
+    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+    #         plt.plot(counts_adapt_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
         
-        print("Displaying plots...")
-        plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3.png", dpi=300, bbox_inches="tight")
-        plt.close()
+    #     # Subplot 3: Adaptive VAR
+    #     plt.subplot(1, 3, 3)
+    #     plt.title("Adaptive VAR: Number of pulls per arm")
+    #     for arm_idx in range(n_arms):
+    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+    #         plt.plot(counts_adapt_v_mean[:, arm_idx], label=label, linewidth=2, linestyle=linestyle)
+            
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("Number of pulls ($T_i(t)$)")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure2.png", dpi=300, bbox_inches="tight")
+    #     plt.close()
 
-        # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
-        plt.figure(6+num_graph*10, figsize=(14, 6))
-        plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
+
+    #     # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
+    #     plt.figure(3+num_graph*10, figsize=(14, 6))
+    #     plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
         
-        for arm_idx in range(n_arms):
-            color = f'C{arm_idx}' 
-            linestyle = '-' if arm_test[arm_idx]!='control' else '--'
-            label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
+    #     for arm_idx in range(n_arms):
+    #         color = f'C{arm_idx}' 
+    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
             
-            for sim_counts in counts_adapt_v_list:
-                plt.plot(sim_counts[:, arm_idx], 
-                        color=color, 
-                        alpha=0.15,
-                        linewidth=0.8,
-                        linestyle=linestyle)
+    #         for sim_counts in counts_adapt_list:
+    #             plt.plot(sim_counts[:, arm_idx], 
+    #                     color=color, 
+    #                     alpha=0.15,
+    #                     linewidth=0.8,
+    #                     linestyle=linestyle)
 
-            plt.plot(counts_adapt_v_mean[:, arm_idx], 
-                    label=label, 
-                    color=color, 
-                    linewidth=2.5,
-                    linestyle=linestyle)
+    #         plt.plot(counts_adapt_mean[:, arm_idx], 
+    #                 label=label, 
+    #                 color=color, 
+    #                 linewidth=2.5,
+    #                 linestyle=linestyle)
             
-        plt.xlabel("Time (t)")
-        plt.ylabel("Number of pulls ($T_i(t)$)")
-        plt.legend(loc='upper left')
-        plt.grid(True, alpha=0.3)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("Number of pulls ($T_i(t)$)")
+    #     plt.legend(loc='upper left')
+    #     plt.grid(True, alpha=0.3)
         
-        print("Displaying plots...")
-        plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3var.png", dpi=300, bbox_inches="tight")
-        plt.close()
+    #     print("Displaying plots...")
+    #     plt.tight_layout()
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure3.png", dpi=300, bbox_inches="tight")
+    #     plt.close()
 
-        # --- PLOT 4: P-VALUES ---
-        plt.figure(4+num_graph*10, figsize=(12, 6))
-        # Subplot 1: Uniform
-        plt.subplot(1, 3, 1)
-        plt.title("Uniform: P values by iteration and arm")
-        for arm_idx in range(n_arms):
-            # print("bc1")
-            label = f"Arm {arm_test[arm_idx][0:4]}"
-            plt.plot(np_p_value_mean_unif[:, arm_idx], label=label, linewidth=2)
-        plt.xlabel("Time (t)")
-        plt.ylabel("P values")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        # Subplot 2: Adaptative
-        plt.subplot(1, 3, 2)
-        plt.title("Adaptative: P values by iteration and arm")
-        for arm_idx in range(n_arms):
-            # print("bc2")
-            label = f"Arm {arm_test[arm_idx][0:4]}"
-            plt.plot(np_p_value_mean_adapt[:, arm_idx], label=label, linewidth=2)
-        plt.xlabel("Time (t)")
-        plt.ylabel("P values")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        # Subplot 3: Adaptative VAR
-        plt.subplot(1, 3, 3)
-        plt.title("Adaptative VAR: P values by iteration and arm")
-        for arm_idx in range(n_arms):
-            # print("bc3")
-            label = f"Arm {arm_test[arm_idx][0:4]}"
-            plt.plot(np_p_value_mean_adapt_v[:, arm_idx], label=label, linewidth=2)
-        plt.xlabel("Time (t)")
-        plt.ylabel("P values")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure4.png", dpi=300, bbox_inches="tight")
-        plt.close()
-
-    # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
-
-        # Définition explicite des couleurs pour chaque algorithme
-        color_unif = 'tab:blue'
-        color_adapt = 'tab:orange'
-        color_adapt_v = 'tab:green'
-
-        # Création d'une grille : n_arms (lignes) x 1 (colonne)
-        # On réduit un peu la largeur (ex: 10) vu qu'il n'y a plus qu'une seule colonne
-        fig, axes = plt.subplots(nrows=n_arms, ncols=1, 
-                                figsize=(10, 2.5 * n_arms), 
-                                sharex=True)
-
-        # Sécurité au cas où il n'y aurait qu'un seul bras (axes ne serait pas une liste)
-        if n_arms == 1:
-            axes = [axes]
-
-        for arm_idx in range(n_arms):
-            ax = axes[arm_idx]
-            arm_name = arm_test[arm_idx]
+    #     # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
+    #     plt.figure(6+num_graph*10, figsize=(14, 6))
+    #     plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)")
+        
+    #     for arm_idx in range(n_arms):
+    #         color = f'C{arm_idx}' 
+    #         linestyle = '-' if arm_test[arm_idx]!='control' else '--'
+    #         label = f"Arm {arm_idx} ($mu$={arm_test[arm_idx][0:4]})"
             
-            # Ajout du titre pour identifier de quel bras on parle sur cette ligne
-            ax.set_title(f"P-values evolution for Arm {arm_name}")
+    #         for sim_counts in counts_adapt_v_list:
+    #             plt.plot(sim_counts[:, arm_idx], 
+    #                     color=color, 
+    #                     alpha=0.15,
+    #                     linewidth=0.8,
+    #                     linestyle=linestyle)
 
-            # Tracé des 3 trajectoires sur le MÊME graphique
-            ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
-            ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
-            ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
+    #         plt.plot(counts_adapt_v_mean[:, arm_idx], 
+    #                 label=label, 
+    #                 color=color, 
+    #                 linewidth=2.5,
+    #                 linestyle=linestyle)
             
-            ax.set_ylabel("P value")
-            ax.legend(loc="upper right", fontsize="small")
-            ax.grid(True, alpha=0.3)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("Number of pulls ($T_i(t)$)")
+    #     plt.legend(loc='upper left')
+    #     plt.grid(True, alpha=0.3)
+        
+    #     print("Displaying plots...")
+    #     plt.tight_layout()
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure3var.png", dpi=300, bbox_inches="tight")
+    #     plt.close()
 
-        # Ajout de l'axe des abscisses uniquement sur le tout dernier graphique du bas
-        axes[-1].set_xlabel("Time (t)")
+    #     # --- PLOT 4: P-VALUES ---
+    #     plt.figure(4+num_graph*10, figsize=(12, 6))
+    #     # Subplot 1: Uniform
+    #     plt.subplot(1, 3, 1)
+    #     plt.title("Uniform: P values by iteration and arm")
+    #     for arm_idx in range(n_arms):
+    #         # print("bc1")
+    #         label = f"Arm {arm_test[arm_idx][0:4]}"
+    #         plt.plot(np_p_value_mean_unif[:, arm_idx], label=label, linewidth=2)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("P values")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
+    #     # Subplot 2: Adaptative
+    #     plt.subplot(1, 3, 2)
+    #     plt.title("Adaptative: P values by iteration and arm")
+    #     for arm_idx in range(n_arms):
+    #         # print("bc2")
+    #         label = f"Arm {arm_test[arm_idx][0:4]}"
+    #         plt.plot(np_p_value_mean_adapt[:, arm_idx], label=label, linewidth=2)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("P values")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
+    #     # Subplot 3: Adaptative VAR
+    #     plt.subplot(1, 3, 3)
+    #     plt.title("Adaptative VAR: P values by iteration and arm")
+    #     for arm_idx in range(n_arms):
+    #         # print("bc3")
+    #         label = f"Arm {arm_test[arm_idx][0:4]}"
+    #         plt.plot(np_p_value_mean_adapt_v[:, arm_idx], label=label, linewidth=2)
+    #     plt.xlabel("Time (t)")
+    #     plt.ylabel("P values")
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
 
-        plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure5.png", dpi=300, bbox_inches="tight")
-        # plt.show()
-        num_graph+=1
-        plt.close()
+    #     plt.tight_layout()
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure4.png", dpi=300, bbox_inches="tight")
+    #     plt.close()
+
+    # # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
+
+    #     # Définition explicite des couleurs pour chaque algorithme
+    #     color_unif = 'tab:blue'
+    #     color_adapt = 'tab:orange'
+    #     color_adapt_v = 'tab:green'
+
+    #     # Création d'une grille : n_arms (lignes) x 1 (colonne)
+    #     # On réduit un peu la largeur (ex: 10) vu qu'il n'y a plus qu'une seule colonne
+    #     fig, axes = plt.subplots(nrows=n_arms, ncols=1, 
+    #                             figsize=(10, 2.5 * n_arms), 
+    #                             sharex=True)
+
+    #     # Sécurité au cas où il n'y aurait qu'un seul bras (axes ne serait pas une liste)
+    #     if n_arms == 1:
+    #         axes = [axes]
+
+    #     for arm_idx in range(n_arms):
+    #         ax = axes[arm_idx]
+    #         arm_name = arm_test[arm_idx]
+            
+    #         # Ajout du titre pour identifier de quel bras on parle sur cette ligne
+    #         ax.set_title(f"P-values evolution for Arm {arm_name}")
+
+    #         # Tracé des 3 trajectoires sur le MÊME graphique
+    #         ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
+    #         ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
+    #         ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
+            
+    #         ax.set_ylabel("P value")
+    #         ax.legend(loc="upper right", fontsize="small")
+    #         ax.grid(True, alpha=0.3)
+
+    #     # Ajout de l'axe des abscisses uniquement sur le tout dernier graphique du bas
+    #     axes[-1].set_xlabel("Time (t)")
+
+    #     plt.tight_layout()
+    #     plt.savefig(git_root / f"figure_real_data/{name_data}/figure5.png", dpi=300, bbox_inches="tight")
+    #     # plt.show()
+    #     num_graph+=1
+    #     plt.close()
