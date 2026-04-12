@@ -7,6 +7,9 @@ import time
 import importlib
 import sys
 import os
+import pickle
+from datetime import datetime
+
 
 # On récupère le chemin absolu du dossier parent (bandit_approach_simulation)
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +29,32 @@ st.set_page_config(
     page_icon="🎰",
     layout="wide"
 )
+# Dossier de stockage
+SIMS_DIR = "saved_simulations"
+if not os.path.exists(SIMS_DIR):
+    os.makedirs(SIMS_DIR)
+
+CATALOG_FILE = os.path.join(SIMS_DIR, "sim_catalog.csv")
+
+def save_simulation(name, metadata, payload):
+    # Payload contient tous les gros objets (arrays, figures, etc.)
+    timestamp = int(time.time())
+    filename = f"sim_{timestamp}.pkl"
+    filepath = os.path.join(SIMS_DIR, filename)
+    
+    with open(filepath, 'wb') as f:
+        pickle.dump(payload, f)
+    
+    # Mise à jour du catalogue CSV
+    metadata['filename'] = filename
+    metadata['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    df_meta = pd.DataFrame([metadata])
+    
+    if not os.path.isfile(CATALOG_FILE):
+        df_meta.to_csv(CATALOG_FILE, index=False)
+    else:
+        df_meta.to_csv(CATALOG_FILE, mode='a', header=False, index=False)
+    return filename
 
 # -----------------------------------------------------------------------------
 # PART 1: LES ALGORITHMES
@@ -179,7 +208,7 @@ st.set_page_config(
 # PART 2: SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 
-def prepare_experiment(true_means, horizon, n_sims, scale):
+def prepare_experiment(true_means, horizon, n_sims, scale, dist_type):
     n_arms = len(true_means)
     all_arm_data_by_sim = []
 
@@ -189,18 +218,23 @@ def prepare_experiment(true_means, horizon, n_sims, scale):
     for sim in range(n_sims):
         all_arm_data = []
         for arm in range(n_arms):
-            result_arm = [np.random.normal(loc=true_means[arm], scale=scale) for _ in range(horizon)]
+            # --- CHOIX DE LA LOI ---
+            if "Normale" in dist_type:
+                # Loi Normale classique
+                result_arm = np.random.normal(loc=true_means[arm], scale=scale, size=horizon).tolist()
+            else:
+                # Loi Binomiale (n=1, p=moyenne) -> Bernoulli
+                # On s'assure que p est bien entre 0 et 1 pour éviter les erreurs
+                p = np.clip(true_means[arm], 0, 1)
+                result_arm = np.random.binomial(n=1, p=p, size=horizon).tolist()
+            
             all_arm_data.append(result_arm)
         all_arm_data_by_sim.append(all_arm_data)
-
         progress_bar.progress((sim + 1) / n_sims)
-        status_text.text(f"Préparation des données: {sim + 1}/{n_sims} simulations")
+        status_text.text(f"Préparation ({dist_type}): {sim + 1}/{n_sims} simulations")
 
-    status_text.text("Préparation terminée!")
-    time.sleep(0.5)
     status_text.empty()
     progress_bar.empty()
-
     return all_arm_data_by_sim
 
 
@@ -464,9 +498,23 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Paramètres de simulation")
 
+    st.markdown("---")
+    st.header("Distribution des récompenses")
+    dist_type = st.radio(
+        "Type de loi",
+        ["Normale", "Binomiale"],
+        help="La loi normale est continue (bruit sigma), la binomiale est discrète (0 ou 1)."
+    )
+
+    if dist_type == "Binomiale":
+        st.warning("⚠️ En mode Binomiale, assurez-vous que vos moyennes sont entre 0 et 1.")
     n_sims = st.slider("Nombre de simulations", 10, 500, 50, 10)
     horizon = st.slider("Horizon (T)", 100, 2000, 800, 50)
-    sigma = st.slider("Bruit (σ)", 0.1, 3.0, 1.0, 0.1)
+    if dist_type == "Normale":
+        sigma = st.slider("Bruit (σ)", 0.1, 3.0, 1.0, 0.1)
+    else:
+        # On définit une valeur par défaut pour éviter que Python ne plante quand il cherchera la variable 'sigma' plus bas dans le code.
+        sigma = 0.0 
     delta = st.slider("Paramètre δ (FDR)", 0.01, 0.5, 0.05, 0.01)
     mu_0 = st.number_input("Seuil μ₀", value=0.0, step=0.1)
     init_nb= st.slider("Nombre initial de tirage par bras", 0, 100, 10, 10)
@@ -498,8 +546,11 @@ with st.sidebar:
 
 if run_button:
     with st.spinner("Préparation des données..."):
-        all_arm_data = prepare_experiment(true_means, horizon + init_nb, n_sims, sigma)
-
+        all_arm_data = prepare_experiment(true_means, horizon + init_nb, n_sims, sigma, dist_type)
+        safe_horizon = horizon + (init_nb * n_arms) + 100 
+        
+        all_arm_data = prepare_experiment(true_means, safe_horizon, n_sims, sigma, dist_type)
+        
     col1, col2 = st.columns(2)
     control_arm=0 # indice du bras control , donc rajouter dans le streamlit le choix du bras control
     init_choice=True
@@ -520,13 +571,28 @@ if run_button:
 
 
     st.success("✅ Simulations terminées avec succès!")
-
+    with st.expander("💾 Enregistrer ces résultats en local"):
+        sim_name = st.text_input("Nom de la simulation", value=f"Simu {n_arms} bras - {delta} delta")
+        if st.button("Confirmer la sauvegarde"):
+            # On regroupe TOUT ce qui est nécessaire pour reconstruire les graphes
+            payload = {
+                'tpr_adapt': tpr_adapt, 'tpr_unif': tpr_unif,
+                'counts_adapt': counts_adapt_mean, 'counts_unif': counts_unif_mean,
+                'counts_list_adapt': counts_list_adapt, # Pour le Spaghetti plot
+                'p_adapt': pvalues_adapt_mean, 'p_unif': pvalues_unif_mean,
+                'true_means': true_means, 'mu_0': mu_0, 'delta': delta, 'sigma': sigma,
+                'horizon': horizon, 'n_arms': n_arms
+            }
+            metadata = {'name': sim_name, 'n_arms': n_arms, 'delta': delta, 'horizon': horizon}
+            fname = save_simulation(sim_name, metadata, payload)
+            st.toast(f"Sauvegardé sous {fname}")
+            
     st.markdown("---")
     st.header("📊 Résultats")
     display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0)
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 , tab8= st.tabs([
         "TPR - Vitesse de découverte",
         "Répartition des tirages",
         "Spaghetti Plot",
@@ -534,6 +600,7 @@ if run_button:
         "Données brutes",
         "P-Values (combiné)",
         "P-Values (grille)",
+        "Historique Local"
     ])
 
     with tab1:
@@ -642,6 +709,36 @@ if run_button:
         plt.close(fig)
         st.info("Chaque ligne correspond à un bras. Les couleurs sont identiques entre Uniform et Adaptive.")
 
+    with tab8:
+        st.header("Historique des simulations")
+        if os.path.exists(CATALOG_FILE):
+            catalog = pd.read_csv(CATALOG_FILE)
+            
+            # Sélection de la simu
+            selected_indices = st.selectbox(
+                "Sélectionnez une simulation à recharger :", 
+                options=catalog.index, 
+                format_func=lambda x: f"{catalog.iloc[x]['date']} - {catalog.iloc[x]['name']}"
+            )
+            
+            if st.button("Charger et afficher les graphiques"):
+                target_file = catalog.iloc[selected_indices]['filename']
+                with open(os.path.join(SIMS_DIR, target_file), 'rb') as f:
+                    old = pickle.load(f)
+                
+                st.divider()
+                st.subheader(f"Restauration de : {catalog.iloc[selected_indices]['name']}")
+                
+                # RE-AFFICHAGE DES GRAPHES CLÉS
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.pyplot(plot_tpr_comparison(old['tpr_adapt'], old['tpr_unif'], old['delta'], old['sigma'], 50))
+                with c2:
+                    st.pyplot(plot_pulls_comparison(old['counts_unif'], old['counts_adapt'], old['true_means'], old['mu_0'], old['delta'], old['sigma']))
+                
+                st.pyplot(plot_pvalues_grid(old['p_unif'], old['p_adapt'], old['true_means']))
+        else:
+            st.info("Aucun historique trouvé.")
 else:
     st.markdown("""
     ## Bienvenue sur le simulateur d'algorithmes de bandit!
