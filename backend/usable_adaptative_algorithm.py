@@ -423,7 +423,7 @@ class UniformAlgo:
             effective_delta = self.delta * k / self.n
             passing_arms = []
             for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / self.counts[i] -1) if self.counts[i] > 1 else 1.0
+                sigma = np.sqrt(self.emp_vars[i] / (self.counts[i] -1)) if self.counts[i] > 1 else 1.0
                 lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
                 if lcb >= self.mu_0:
                     passing_arms.append(i)
@@ -444,7 +444,7 @@ class UniformAlgo:
         if diff <= 0:
             return 1.0
 
-        sigma = np.sqrt(self.emp_vars[arm_idx] / t-1) if t > 1 else 1.0
+        sigma = np.sqrt(self.emp_vars[arm_idx] / (t-1) )if t > 1 else 1.0
 
         def objective(p):
             if p <= 0: return float('inf') 
