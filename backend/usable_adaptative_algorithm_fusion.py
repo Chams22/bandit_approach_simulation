@@ -477,15 +477,8 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             break
 
         else:
-            # Fetch the next pre-generated observation for this specific arm in this simulation
-            len_arm = len(all_arm_data[no_sim][arm])
-            # if we are at the end of the arm we start at zero again
-            if all_arm_counts[arm] >= len_arm:
-                observation = all_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
-                print("time", t, "all_arm_counts[arm]", all_arm_counts[arm], "len_arm", len_arm)
-                print("arm ended, recycling data for this arm: ", arm)
-            else:
-                observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
+            # Bootstrap: sample with replacement from arm's data
+            observation = np.random.choice(all_arm_data[no_sim][arm])
 
             # Increment the local counter so the next pull gets the next value
             all_arm_counts[arm] += 1
@@ -504,7 +497,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     return run_pr, p_values_list
 
 
-def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean):
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean, rho=1.0):
     """
     Runs the bandit experiment using pre-generated data for consistency.
 
@@ -575,8 +568,8 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
     # --- Algo factory ---
     algo_factory = {
-        'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta),
-        'uniform':  lambda: UniformAlgo(n_arms, mu_0, delta),
+        'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta, rho=rho),
+        'uniform':  lambda: UniformAlgo(n_arms, mu_0, delta, rho=rho),
     }
 
     if mode not in algo_factory:
