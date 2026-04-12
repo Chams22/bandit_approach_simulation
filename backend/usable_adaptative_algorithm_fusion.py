@@ -437,6 +437,8 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 data_init.append(data_init_arm)
             algo.init_process(data_init)
             all_arm_counts = [init_nb for _ in range(n_arms)]
+            # Reset so only the post-init snapshot remains
+            algo.counts_evolution = [algo.counts.copy()]
     
     
 
