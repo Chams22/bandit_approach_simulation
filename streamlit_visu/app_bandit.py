@@ -20,8 +20,8 @@ if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
 # Maintenant l'import direct de backend fonctionnera
-from backend import usable_adaptative_algorithm
-importlib.reload(usable_adaptative_algorithm)
+from backend import usable_adaptative_algorithm_fusion
+importlib.reload(usable_adaptative_algorithm_fusion)
 
 # Configuration de la page
 st.set_page_config(
@@ -230,107 +230,13 @@ def prepare_experiment(true_means, horizon, n_sims, scale, dist_type):
             
             all_arm_data.append(result_arm)
         all_arm_data_by_sim.append(all_arm_data)
+        
         progress_bar.progress((sim + 1) / n_sims)
         status_text.text(f"Préparation ({dist_type}): {sim + 1}/{n_sims} simulations")
 
     status_text.empty()
     progress_bar.empty()
     return all_arm_data_by_sim
-
-
-# def run_experiment(true_means, horizon, mode, all_arm_data, n_simulations=20, mu_0=0.0):
-#     """
-#     Runs the bandit experiment using pre-generated data for consistency.
-
-#     Parameters
-#     ----------
-#     true_means : array-like
-#     horizon : int
-#     mode : str — 'adaptive' or 'uniform'
-#     all_arm_data : list[sim][arm][pull]
-#     n_simulations : int
-#     mu_0 : float
-
-#     Returns
-#     -------
-#     tpr_history_mean, tpr_list, counts_history_mean, counts_list,
-#     np_p_values_list_by_sim, np_p_values_mean
-#     """
-#     n_arms = len(true_means)
-#     true_positives = [i for i, m in enumerate(true_means) if m > mu_0]
-
-#     tpr_history_sum = np.zeros(horizon)
-#     tpr_list = []
-#     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
-#     counts_list = []
-#     p_values_list_by_sim = []
-
-#     progress_bar = st.progress(0)
-#     status_text = st.empty()
-
-#     for no_sim in range(n_simulations):
-#         p_values_list = []
-#         all_arm_counts = [0 for _ in range(n_arms)]
-
-#         if mode == 'adaptive':
-#             algo = JamiesonJainAlgo(n_arms, mu_0, delta)
-#         elif mode == 'uniform':
-#             algo = UniformAlgo(n_arms, mu_0, delta)
-#         else:
-#             raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
-
-#         run_tpr = []
-
-#         for t in range(horizon):
-#             arm = algo.select_arm()
-
-#             if arm == "stop":
-#                 last_tpr = run_tpr[-1] if run_tpr else 1.0
-#                 last_pvals = p_values_list[-1] if p_values_list else [1.0] * n_arms
-#                 remaining_steps = horizon - len(run_tpr)
-#                 run_tpr.extend([last_tpr] * remaining_steps)
-#                 p_values_list.extend([last_pvals] * remaining_steps)
-#                 last_counts = algo.counts_evolution[-1]
-#                 for _ in range(remaining_steps):
-#                     algo.counts_evolution.append(last_counts.copy())
-#                 break
-
-#             else:
-#                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
-#                 all_arm_counts[arm] += 1
-
-#                 p_values_t = algo.bh_update_optimized(arm, observation)
-#                 p_values_list.append(p_values_t)
-
-#                 nb_found = len(algo.S_t.intersection(true_positives))
-#                 current_tpr = nb_found / len(true_positives) if true_positives else 1.0
-#                 run_tpr.append(current_tpr)
-
-#         tpr_i = np.array(run_tpr)
-#         tpr_list.append(tpr_i)
-#         tpr_history_sum += tpr_i
-
-#         counts_arr = np.array(algo.counts_evolution)[:horizon+1]
-#         counts_list.append(counts_arr)
-#         counts_evolution_sum += counts_arr
-#         p_values_list_by_sim.append(p_values_list)
-
-#         progress_bar.progress((no_sim + 1) / n_simulations)
-#         status_text.text(f"Simulations {mode}: {no_sim + 1}/{n_simulations}")
-
-#     tpr_history_mean = tpr_history_sum / n_simulations
-#     counts_history_mean = counts_evolution_sum / n_simulations
-
-#     np_p_values_list_by_sim = np.array(p_values_list_by_sim)    # shape: (n_sims, horizon, n_arms)
-#     np_p_values_mean = np.mean(np_p_values_list_by_sim, axis=0) # shape: (horizon, n_arms)
-
-#     status_text.text(f"Simulations {mode} terminées!")
-#     time.sleep(0.5)
-#     status_text.empty()
-#     progress_bar.empty()
-
-#     return tpr_history_mean, tpr_list, counts_history_mean, counts_list, np_p_values_list_by_sim, np_p_values_mean
-
 
 # -----------------------------------------------------------------------------
 # PART 3: FONCTIONS D'AFFICHAGE
@@ -495,9 +401,17 @@ def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0):
 st.title("🎰 Simulateur Interactif d'Algorithmes de Bandit")
 st.markdown("---")
 
+# Initialiser le session_state
+if "test_configs" not in st.session_state:
+    st.session_state.test_configs = []
+if "test_results" not in st.session_state:
+    st.session_state.test_results = []
+if "running" not in st.session_state:
+    st.session_state.running = False
+
 with st.sidebar:
     st.header("⚙️ Paramètres de simulation")
-
+    st.subheader("➕ Ajouter un test")
     st.markdown("---")
     st.header("Distribution des récompenses")
     dist_type = st.radio(
@@ -546,9 +460,7 @@ with st.sidebar:
 
 if run_button:
     with st.spinner("Préparation des données..."):
-        all_arm_data = prepare_experiment(true_means, horizon + init_nb, n_sims, sigma, dist_type)
-        safe_horizon = horizon + (init_nb * n_arms) + 100 
-        
+        safe_horizon = horizon + (init_nb * n_arms) + 100
         all_arm_data = prepare_experiment(true_means, safe_horizon, n_sims, sigma, dist_type)
         
     col1, col2 = st.columns(2)
@@ -558,7 +470,7 @@ if run_button:
         st.info("Simulation Uniforme en cours...")
         # tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif, _, pvalues_unif_mean = run_experiment(
         #     true_means, horizon, 'uniform', all_arm_data, n_sims, mu_0)
-        (tpr_unif, tpr_list_unif, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = usable_adaptative_algorithm.run_experiment(
+        (tpr_unif, tpr_list_unif, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = usable_adaptative_algorithm_fusion.run_experiment(
             true_means, 0, delta, horizon + init_nb, 'uniform', all_arm_data, n_sims, control_arm, 0, False, False, True)
         
 
@@ -566,7 +478,7 @@ if run_button:
         st.info("Simulation Adaptive en cours...")
         # tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, _, pvalues_adapt_mean = run_experiment(
         #     true_means, horizon, 'adaptive', all_arm_data, n_sims, mu_0)
-        (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = usable_adaptative_algorithm.run_experiment(
+        (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt, np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = usable_adaptative_algorithm_fusion.run_experiment(
             true_means, 0, delta, horizon, 'adaptive', all_arm_data, n_sims, control_arm, init_nb, init_choice, False, True)
 
 
@@ -587,6 +499,159 @@ if run_button:
             fname = save_simulation(sim_name, metadata, payload)
             st.toast(f"Sauvegardé sous {fname}")
             
+    st.markdown("---")
+    add_test = st.button("➕ Ajouter ce test à la file", use_container_width=True)
+
+    if add_test:
+        config = {
+            "n_sims": n_sims,
+            "horizon": horizon,
+            "sigma": sigma,
+            "delta": delta,
+            "mu_0": mu_0,
+            "init_nb": init_nb,
+            "control_arm": int(control_arm),
+            "n_arms": int(n_arms),
+            "true_means": np.array(true_means),
+        }
+        st.session_state.test_configs.append(config)
+        st.success(f"Test #{len(st.session_state.test_configs)} ajouté!")
+
+    st.markdown("---")
+
+    # Afficher la file de tests
+    st.subheader(f"File d'attente ({len(st.session_state.test_configs)} tests)")
+
+    if st.session_state.test_configs:
+        for i, cfg in enumerate(st.session_state.test_configs):
+            with st.expander(f"Test #{i+1} — δ={cfg['delta']}, T={cfg['horizon']}, σ={cfg['sigma']}"):
+                st.write(f"**Bras:** {cfg['n_arms']}, **Sims:** {cfg['n_sims']}")
+                st.write(f"**Moyennes:** {cfg['true_means']}")
+                st.write(f"**μ₀:** {cfg['mu_0']}, **Init pulls:** {cfg['init_nb']}")
+                st.write(f"**Bras contrôle:** {cfg['control_arm']}")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            run_all = st.button("Lancer tous les tests", type="primary", use_container_width=True)
+        with col_b:
+            clear_queue = st.button("Vider la file", use_container_width=True)
+
+        if clear_queue:
+            st.session_state.test_configs = []
+            st.session_state.test_results = []
+            st.rerun()
+    else:
+        run_all = False
+        st.info("Ajoute des tests avec le formulaire ci-dessus.")
+
+    st.markdown("---")
+
+    if st.button("Effacer les résultats affichés"):
+        st.session_state.test_results = []
+        st.rerun()
+
+    st.markdown("---")
+    st.caption("Basé sur l'algorithme de Jamieson & Jain (2018)")
+
+
+# ---- MAIN: LANCEMENT DES TESTS ----
+
+if st.session_state.test_configs and 'run_all' in dir() and run_all:
+    configs_to_run = list(st.session_state.test_configs)  # copie
+    st.session_state.test_results = []
+
+    global_progress = st.progress(0)
+    global_status = st.empty()
+
+    for test_idx, cfg in enumerate(configs_to_run):
+        global_status.info(f"⏳ Test {test_idx + 1}/{len(configs_to_run)} en cours...")
+        global_progress.progress((test_idx) / len(configs_to_run))
+
+        true_means = cfg["true_means"]
+        n_arms = cfg["n_arms"]
+        horizon_val = cfg["horizon"]
+        n_sims_val = cfg["n_sims"]
+        sigma_val = cfg["sigma"]
+        delta_val = cfg["delta"]
+        mu_0_val = cfg["mu_0"]
+        init_nb_val = cfg["init_nb"]
+        control_arm_val = cfg["control_arm"]
+
+        # Préparation des données
+        safe_horizon = horizon_val + init_nb_val * n_arms
+        all_arm_data = prepare_experiment(true_means, safe_horizon, n_sims_val, sigma_val, dist_type)
+        # Uniform
+        (tpr_unif, tpr_list_unif, counts_unif_mean, counts_unif_list,
+         np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = usable_adaptative_algorithm_fusion.run_experiment(
+            true_means, 0, delta_val, horizon_val + init_nb_val, 'uniform',
+            all_arm_data, n_sims_val, control_arm_val, 0, False, False, True)
+
+        # Adaptive
+        (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
+         np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = usable_adaptative_algorithm_fusion.run_experiment(
+            true_means, 0, delta_val, horizon_val, 'adaptive',
+            all_arm_data, n_sims_val, control_arm_val, init_nb_val, True, False, True)
+
+        # Générer les figures
+        figures = {}
+        figures["tpr_comparison"] = plot_tpr_comparison(tpr_adapt, tpr_unif, delta_val, sigma_val, n_sims_val)
+        figures["pulls_comparison"] = plot_pulls_comparison(counts_unif_mean, counts_adapt_mean, true_means, mu_0_val, delta_val, sigma_val)
+        figures["pvalues_combined"] = plot_pvalues_combined(pvalues_unif_mean, pvalues_adapt_mean, true_means)
+        figures["pvalues_grid"] = plot_pvalues_grid(pvalues_unif_mean, pvalues_adapt_mean, true_means)
+
+        result = {
+            "config": cfg,
+            "tpr_adapt": tpr_adapt,
+            "tpr_unif": tpr_unif,
+            "tpr_list_adapt": tpr_list_adapt,
+            "tpr_list_unif": tpr_list_unif,
+            "counts_adapt_mean": counts_adapt_mean,
+            "counts_unif_mean": counts_unif_mean,
+            "counts_list_adapt": counts_list_adapt,
+            "pvalues_adapt_mean": pvalues_adapt_mean,
+            "pvalues_unif_mean": pvalues_unif_mean,
+            "figures": figures,
+        }
+
+        # Sauvegarde locale
+        saved_dir = save_test_results(test_idx + 1, cfg, result, RESULTS_DIR)
+        result["saved_dir"] = saved_dir
+
+        st.session_state.test_results.append(result)
+
+        # Fermer les figures pour libérer la mémoire (on les a en session_state)
+        for fig in figures.values():
+            plt.close(fig)
+
+    global_progress.progress(1.0)
+    global_status.success(f"✅ {len(configs_to_run)} tests terminés! Résultats sauvegardés dans '{RESULTS_DIR}/'")
+    time.sleep(1)
+    global_progress.empty()
+
+    # Vider la file après exécution
+    st.session_state.test_configs = []
+
+
+# ---- MAIN: AFFICHAGE DES RESULTATS ----
+
+if st.session_state.test_results:
+    st.markdown("---")
+    st.header(f" Résultats ({len(st.session_state.test_results)} tests)")
+
+    for res_idx, res in enumerate(st.session_state.test_results):
+        cfg = res["config"]
+        true_means = cfg["true_means"]
+        n_arms = cfg["n_arms"]
+        mu_0_val = cfg["mu_0"]
+        delta_val = cfg["delta"]
+        sigma_val = cfg["sigma"]
+        horizon_val = cfg["horizon"]
+        n_sims_val = cfg["n_sims"]
+
+        st.markdown("---")
+        st.subheader(f"File d'attente ({len(st.session_state.test_configs)} tests)")        
+        st.caption(f"Bras: {n_arms} | Moyennes: {true_means} | Sims: {n_sims_val} | \uD83D\uDCBE {res.get('saved_dir', '')}")
+
     st.markdown("---")
     st.header("📊 Résultats")
     display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0)
@@ -663,7 +728,7 @@ if run_button:
 
     with tab4:
         st.subheader("Analyse des intervalles de confiance")
-        demo_algo = usable_adaptative_algorithm.UniformAlgo(n_arms, mu_0, delta)
+        demo_algo = usable_adaptative_algorithm_fusion.UniformAlgo(n_arms, mu_0, delta)
         demo_algo.counts = counts_adapt_mean[-1].astype(int)
         demo_algo.emp_means = np.array([counts_adapt_mean[-1][i] / horizon if counts_adapt_mean[-1][i] > 0 else 0
                                         for i in range(n_arms)])
