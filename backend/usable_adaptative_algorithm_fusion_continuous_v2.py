@@ -158,6 +158,12 @@ class JamiesonJainAlgo:
                 self.time += 1
                 self.counts_evolution.append(self.counts.copy())
 
+        # --- Automatic rho calibration from init data ---
+        var_estimates = [self.emp_vars[i] / max(self.counts[i] - 1, 1)
+                         for i in range(self.n) if self.counts[i] > 1]
+        if var_estimates:
+            self.rho = float(np.median(var_estimates))
+
         # --- BH after init ---
         p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
         p_values_with_idx.sort(key=lambda x: x[0])
