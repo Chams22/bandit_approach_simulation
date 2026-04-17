@@ -82,7 +82,7 @@ class JamiesonJainAlgo:
                 for rank in range(k):
                     self.S_t.add(p_values_with_idx[rank][1])
                 break
-        print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
+        # print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
 
 
 

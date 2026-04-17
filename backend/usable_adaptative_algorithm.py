@@ -89,7 +89,7 @@ class JamiesonJainAlgo:
                 for rank in range(k):
                     self.S_t.add(p_values_with_idx[rank][1])
                 break
-        print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
+        # print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
 
 
 
@@ -491,8 +491,6 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             algo.init_process(data_init)
             all_arm_counts = [init_nb for _ in range(n_arms)]
     
-    
-
     # --- Main loop ---
     for t in range(0, horizon):
 
@@ -528,7 +526,6 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             for _ in range(remaining_steps):
                 # On utilise list() pour créer une copie indépendante à chaque itération
                 p_values_list.append(list(last_p_values))
-
             break
 
         else:

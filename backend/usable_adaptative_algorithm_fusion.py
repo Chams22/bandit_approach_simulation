@@ -5,7 +5,7 @@ from tqdm import tqdm
 # PART 1: THE ALGORITHM
 # -----------------------------------------------------------------------------
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=1.0):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -93,7 +93,7 @@ class JamiesonJainAlgo:
                 for rank in range(k):
                     self.S_t.add(p_values_with_idx[rank][1])
                 break
-        print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
+        # print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
 
     def select_arm(self):
         """
@@ -238,7 +238,7 @@ class JamiesonJainAlgo:
 
         
 class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=1.0):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01):
         """
         Initializes the Uniform (Round-Robin) sampling algorithm.
         
