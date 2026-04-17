@@ -189,7 +189,7 @@ if __name__ == "__main__":
         # horizon = min_len*10
         horizon = sum([len(arm) for arm in data_test[0]])
         n_arms = len(arm_test)
-        init_nb = round(min_len*0.01)
+        init_nb = round(min_len*0.1)
         init_choice = True
         mu_0_unif=mean(data_test[0][control_arm])
         print("mu_0 moyenne calcule", mu_0_unif)

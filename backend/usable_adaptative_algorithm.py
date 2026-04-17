@@ -289,6 +289,27 @@ class UniformAlgo:
         # On initialise avec des zéros pour t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
+    def init_process(self, data):
+        for arm_idx, arm_data in enumerate(data):
+            for obs in arm_data:
+                n = self.counts[arm_idx]
+                old_mean = self.emp_means[arm_idx]
+                self.emp_means[arm_idx] = (old_mean * n + obs) / (n + 1)
+                new_mean = self.emp_means[arm_idx]
+                self.emp_vars[arm_idx] += (obs - old_mean) * (obs - new_mean)
+                self.counts[arm_idx] += 1
+                self.time += 1
+                self.counts_evolution.append(self.counts.copy())
+
+        # BH après init
+        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+        p_values_with_idx.sort(key=lambda x: x[0])
+        for k in range(self.n, 0, -1):
+            if p_values_with_idx[k-1][0] <= self.delta * k / self.n:
+                for rank in range(k):
+                    self.S_t.add(p_values_with_idx[rank][1])
+                break
+
     def phi(self, t, delta_val, sigma=1.0):
         """
         Calculates the "Anytime" Confidence Interval width.
@@ -482,7 +503,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     run_pr = []
 
     # --- Init (adaptive only) ---
-    if mode == 'adaptive' and init_choice == True:
+    if init_choice:
         if init_nb > 0:
             data_init = []
             for arm in range(n_arms):
@@ -490,6 +511,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 data_init.append(data_init_arm)
             algo.init_process(data_init)
             all_arm_counts = [init_nb for _ in range(n_arms)]
+            algo.counts_evolution = [algo.counts.copy()]
     
     # --- Main loop ---
     for t in range(0, horizon):
