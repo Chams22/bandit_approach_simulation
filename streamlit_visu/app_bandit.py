@@ -590,7 +590,7 @@ with st.sidebar:
     horizon = st.slider("Horizon (T)", 100, 2000, 800, 50)
 
     if dist_type == "Normale":
-        sigma = st.slider("Bruit (σ)", 0.1, 3.0, 1.0, 0.1)
+        sigma = st.slider("Bruit (σ)", 0.1, 3.0, 0.5, 0.1)
     else:
         sigma = 0.0  # pas de bruit paramétrique en Bernoulli
 
@@ -599,7 +599,7 @@ with st.sidebar:
     default_mu_0 = 0.5 if dist_type == "Binomiale" else 0.0
     mu_0 = st.number_input("Seuil μ₀", value=default_mu_0, step=0.1)
 
-    init_nb = st.slider("Nombre initial de tirages par bras", 0, 100, 10, 10)
+    init_nb = st.slider("Nombre initial de tirages par bras", 1, 100, 1, 1)
     init_choice = st.checkbox(
         "Activer l'initialisation (init_choice)", value=True,
         help="Si coché, l'algorithme Adaptive commence par tirer chaque bras init_nb fois.",
