@@ -50,6 +50,7 @@ ALGO_OPTIONS = {
     "Fusion v3 — Binaire":  "usable_adaptative_algorithm_fusion_binary_v3",
 }
 
+
 def load_algo_module(algo_name: str):
     """Importe dynamiquement le module backend choisi."""
     module_name = ALGO_OPTIONS[algo_name]
