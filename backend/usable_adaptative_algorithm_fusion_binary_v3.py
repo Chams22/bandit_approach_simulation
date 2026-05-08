@@ -1,9 +1,6 @@
 import numpy as np
 from tqdm import tqdm
 
-_MIN_PULLS_BEFORE_FILTER = 10
-_EPSILON_RECHECK = 0.02
-
 # -----------------------------------------------------------------------------
 # Adapted for Binary (Bernoulli) Data — V3
 # -----------------------------------------------------------------------------
@@ -219,45 +216,34 @@ class JamiesonJainAlgo:
     # -------------------------------------------------------------------------
     def select_arm(self):
         """
-        UCB-based arm selection with active arm filtering.
-        Arms whose UCB stays below the detection threshold after _MIN_PULLS_BEFORE_FILTER
-        pulls are classified as inactive and only revisited with probability _EPSILON_RECHECK.
-        Fallback: if all arms are inactive, pick the best UCB among all treatment arms.
+        UCB-based arm selection.
+        In two-sample mode, the control arm is excluded from candidates since it
+        is always pulled as a paired observation alongside each test arm pull.
         """
         unsampled = [i for i in range(self.n)
                      if self.counts[i] == 0 and i != self.control_arm_idx]
         if unsampled:
             return unsampled[0]
 
-        treatment_arms = [i for i in range(self.n)
-                          if i not in self.S_t and i != self.control_arm_idx]
-        if not treatment_arms:
+        candidates = [i for i in range(self.n)
+                      if i not in self.S_t and i != self.control_arm_idx]
+        if not candidates:
             return "stop"
 
-        threshold = 0.0 if self.control_arm_idx is not None else self.mu_0
+        best_ucb = -float('inf')
+        selected = candidates[0]
 
-        def _ucb(i):
+        for i in candidates:
             if self.control_arm_idx is not None:
-                return ((self.emp_means[i] - self.emp_means[self.control_arm_idx])
-                        + self.phi(self.counts[i], self.delta, self.emp_vars[i])
-                        + self.phi(self.counts[self.control_arm_idx], self.delta,
-                                   self.emp_vars[self.control_arm_idx]))
-            return self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
-
-        active, inactive = [], []
-        for i in treatment_arms:
-            if self.counts[i] < _MIN_PULLS_BEFORE_FILTER or _ucb(i) > threshold:
-                active.append(i)
+                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
+                      + self.phi(self.counts[i], self.delta, self.emp_vars[i]) \
+                      + self.phi(self.counts[self.control_arm_idx], self.delta, self.emp_vars[self.control_arm_idx])
             else:
-                inactive.append(i)
-
-        if not active:
-            return max(treatment_arms, key=_ucb)
-
-        if inactive and np.random.rand() < _EPSILON_RECHECK:
-            return np.random.choice(inactive)
-
-        return max(active, key=_ucb)
+                ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
+            if ucb > best_ucb:
+                best_ucb = ucb
+                selected = i
+        return selected
 
     # -------------------------------------------------------------------------
     # BH update (non-optimized, LCB-based)
@@ -501,25 +487,11 @@ class UniformAlgo:
             return float(np.clip(p_value, 1e-300, 1.0))
 
     def select_arm(self):
-        treatment_arms = [i for i in range(self.n)
-                          if i not in self.S_t and i != self.control_arm_idx]
-        if not treatment_arms:
+        candidates = [i for i in range(self.n)
+                      if i not in self.S_t and i != self.control_arm_idx]
+        if not candidates:
             return "stop"
-
-        threshold = 0.0 if self.control_arm_idx is not None else self.mu_0
-
-        def _ucb(i):
-            if self.control_arm_idx is not None:
-                return ((self.emp_means[i] - self.emp_means[self.control_arm_idx])
-                        + self.phi(self.counts[i], self.delta, self.emp_vars[i])
-                        + self.phi(self.counts[self.control_arm_idx], self.delta,
-                                   self.emp_vars[self.control_arm_idx]))
-            return self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
-
-        active = [i for i in treatment_arms
-                  if self.counts[i] < _MIN_PULLS_BEFORE_FILTER or _ucb(i) > threshold]
-        pool = active if active else treatment_arms
-        return np.random.choice(pool)
+        return np.random.choice(candidates)
 
     def bh_update_optimized(self, arm_idx, observation, x_control=None):
         # Save F_{t-1}-measurable control stats before any update
