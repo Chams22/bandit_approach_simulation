@@ -62,37 +62,40 @@ class JamiesonJainAlgo:
     # -------------------------------------------------------------------------
     # Statistics update
     # -------------------------------------------------------------------------
-    def _update_stats(self, arm_idx, observation, x_control=None):
+    def _update_stats(self, arm_idx, observation, x_control=None,
+                      control_mean_prev=None, control_var_prev=None, control_count_prev=None):
         """
         Updates empirical statistics for a given arm.
 
         x_control : float or None
-            If provided (two-sample betting mode), the paired control observation
-            drawn at the same step. The bet is placed on (observation - x_control)
-            directly, giving a valid e-process under H0: mu_arm = mu_control.
-            D = X_arm - X_control ∈ {-1, 0, 1}, requires |lam| < 1.
+            Paired control observation. Bet placed on (observation - x_control).
+        control_mean_prev / control_var_prev / control_count_prev : float or None
+            Previous control arm stats (before current step). Must be passed for
+            predictability: lambda must be F_{t-1}-measurable, so it cannot
+            depend on x_control or the updated control mean.
         """
         n = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
 
         if self.cs_type == 'betting' and n >= 1:
-            mu0 = self.emp_means[self.control_arm_idx] if self.control_arm_idx is not None else self.mu_0
+            if control_mean_prev is not None:
+                mu0 = control_mean_prev
+            elif self.control_arm_idx is not None:
+                mu0 = self.emp_means[self.control_arm_idx]
+            else:
+                mu0 = self.mu_0
             mu0_safe = np.clip(mu0, 1e-6, 1.0 - 1e-6)
 
             if n >= 2:
                 diff_prev = old_mean - mu0_safe
                 if diff_prev > 0:
                     if x_control is not None and self.control_arm_idx is not None:
-                        # Paired two-sample Bernoulli betting: bet on D = X_arm - X_control
-                        # D ∈ {-1, 0, 1}, so need |lam| < 1 to keep 1 + lam*D > 0
                         var_arm = max(old_mean * (1.0 - old_mean), 1e-8)
                         var_ctrl = max(mu0_safe * (1.0 - mu0_safe), 1e-8)
-                        var_diff = var_arm + var_ctrl
-                        lam = diff_prev / var_diff
+                        lam = diff_prev / (var_arm + var_ctrl)
                         lam = np.clip(lam, 0.0, 1.0 - 1e-6)
                         wealth_factor = 1.0 + lam * (observation - x_control)
                     else:
-                        # Single-sample Bernoulli betting
                         lam = diff_prev / (mu0_safe * (1.0 - mu0_safe))
                         lam = min(lam, 1.0 / mu0_safe - 1e-6)
                         lam = max(lam, 0.0)
@@ -155,32 +158,36 @@ class JamiesonJainAlgo:
         """
         Initializes the algorithm with pre-collected data for each arm.
 
-        Two-sample betting mode: the control arm is processed first to build its
-        running stats, then each test arm is processed with paired control
-        observations (matched by index). This ensures the betting martingale is
-        built on valid pairs (X_arm_j, X_ctrl_j) during init, not on unpaired data.
+        Two-sample betting mode: sequential interleaved processing.
+        For each index obs_idx, we first save the current control stats
+        (F_{t-1}-measurable), process each test arm with the paired control
+        observation using those saved stats, then update the control arm.
+        This preserves predictability throughout init.
 
         All other modes: original sequential processing.
         """
         if self.control_arm_idx is not None and self.cs_type == 'betting':
-            # Step 1: build control arm stats from all init observations
-            for obs in data[self.control_arm_idx]:
-                self._update_stats(self.control_arm_idx, obs)
+            ctrl_data = data[self.control_arm_idx]
+            for obs_idx in range(len(ctrl_data)):
+                ctrl_mean_prev = self.emp_means[self.control_arm_idx]
+                ctrl_var_prev = self.emp_vars[self.control_arm_idx]
+                ctrl_count_prev = self.counts[self.control_arm_idx]
+                x_ctrl = ctrl_data[obs_idx]
+                for arm_idx, arm_data in enumerate(data):
+                    if arm_idx == self.control_arm_idx:
+                        continue
+                    if obs_idx < len(arm_data):
+                        self._update_stats(arm_idx, arm_data[obs_idx], x_control=x_ctrl,
+                                           control_mean_prev=ctrl_mean_prev,
+                                           control_var_prev=ctrl_var_prev,
+                                           control_count_prev=ctrl_count_prev)
+                        self.counts[arm_idx] += 1
+                        self.time += 1
+                        self.counts_evolution.append(self.counts.copy())
+                self._update_stats(self.control_arm_idx, x_ctrl)
                 self.counts[self.control_arm_idx] += 1
                 self.time += 1
                 self.counts_evolution.append(self.counts.copy())
-
-            # Step 2: process each test arm paired with the corresponding control obs
-            ctrl_data = data[self.control_arm_idx]
-            for arm_idx, arm_data in enumerate(data):
-                if arm_idx == self.control_arm_idx:
-                    continue
-                for obs_idx, obs in enumerate(arm_data):
-                    x_ctrl = ctrl_data[min(obs_idx, len(ctrl_data) - 1)]
-                    self._update_stats(arm_idx, obs, x_control=x_ctrl)
-                    self.counts[arm_idx] += 1
-                    self.time += 1
-                    self.counts_evolution.append(self.counts.copy())
         else:
             for arm_idx, arm_data in enumerate(data):
                 for obs in arm_data:
@@ -274,15 +281,29 @@ class JamiesonJainAlgo:
             Paired control arm observation (two-sample betting mode only).
             If provided and arm_idx != control_arm_idx, also updates control arm stats.
         """
-        # Paired pull: update control arm stats without advancing time
+        # Save F_{t-1}-measurable control stats before any update
+        control_mean_prev = None
+        control_var_prev = None
+        control_count_prev = None
         if (x_control is not None
                 and self.control_arm_idx is not None
                 and arm_idx != self.control_arm_idx):
+            control_mean_prev = self.emp_means[self.control_arm_idx]
+            control_var_prev = self.emp_vars[self.control_arm_idx]
+            control_count_prev = self.counts[self.control_arm_idx]
+
+        # Update test arm first with F_{t-1}-measurable prev control stats
+        self._update_stats(arm_idx, observation, x_control=x_control,
+                           control_mean_prev=control_mean_prev,
+                           control_var_prev=control_var_prev,
+                           control_count_prev=control_count_prev)
+        self.counts[arm_idx] += 1
+
+        # THEN update control arm
+        if control_mean_prev is not None:
             self._update_stats(self.control_arm_idx, x_control)
             self.counts[self.control_arm_idx] += 1
 
-        self._update_stats(arm_idx, observation, x_control=x_control)
-        self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy())
 
@@ -365,21 +386,27 @@ class UniformAlgo:
 
     def init_process(self, data):
         if self.control_arm_idx is not None and self.cs_type == 'betting':
-            for obs in data[self.control_arm_idx]:
-                self._update_stats(self.control_arm_idx, obs)
+            ctrl_data = data[self.control_arm_idx]
+            for obs_idx in range(len(ctrl_data)):
+                ctrl_mean_prev = self.emp_means[self.control_arm_idx]
+                ctrl_var_prev = self.emp_vars[self.control_arm_idx]
+                ctrl_count_prev = self.counts[self.control_arm_idx]
+                x_ctrl = ctrl_data[obs_idx]
+                for arm_idx, arm_data in enumerate(data):
+                    if arm_idx == self.control_arm_idx:
+                        continue
+                    if obs_idx < len(arm_data):
+                        self._update_stats(arm_idx, arm_data[obs_idx], x_control=x_ctrl,
+                                           control_mean_prev=ctrl_mean_prev,
+                                           control_var_prev=ctrl_var_prev,
+                                           control_count_prev=ctrl_count_prev)
+                        self.counts[arm_idx] += 1
+                        self.time += 1
+                        self.counts_evolution.append(self.counts.copy())
+                self._update_stats(self.control_arm_idx, x_ctrl)
                 self.counts[self.control_arm_idx] += 1
                 self.time += 1
                 self.counts_evolution.append(self.counts.copy())
-            ctrl_data = data[self.control_arm_idx]
-            for arm_idx, arm_data in enumerate(data):
-                if arm_idx == self.control_arm_idx:
-                    continue
-                for obs_idx, obs in enumerate(arm_data):
-                    x_ctrl = ctrl_data[min(obs_idx, len(ctrl_data) - 1)]
-                    self._update_stats(arm_idx, obs, x_control=x_ctrl)
-                    self.counts[arm_idx] += 1
-                    self.time += 1
-                    self.counts_evolution.append(self.counts.copy())
         else:
             for arm_idx, arm_data in enumerate(data):
                 for obs in arm_data:
@@ -401,12 +428,18 @@ class UniformAlgo:
                     self.S_t.add(p_values_with_idx[rank][1])
                 break
 
-    def _update_stats(self, arm_idx, observation, x_control=None):
+    def _update_stats(self, arm_idx, observation, x_control=None,
+                      control_mean_prev=None, control_var_prev=None, control_count_prev=None):
         n = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
 
         if self.cs_type == 'betting' and n >= 1:
-            mu0 = self.emp_means[self.control_arm_idx] if self.control_arm_idx is not None else self.mu_0
+            if control_mean_prev is not None:
+                mu0 = control_mean_prev
+            elif self.control_arm_idx is not None:
+                mu0 = self.emp_means[self.control_arm_idx]
+            else:
+                mu0 = self.mu_0
             mu0_safe = np.clip(mu0, 1e-6, 1.0 - 1e-6)
             if n >= 2:
                 diff_prev = old_mean - mu0_safe
@@ -461,14 +494,29 @@ class UniformAlgo:
         return np.random.choice(candidates)
 
     def bh_update_optimized(self, arm_idx, observation, x_control=None):
+        # Save F_{t-1}-measurable control stats before any update
+        control_mean_prev = None
+        control_var_prev = None
+        control_count_prev = None
         if (x_control is not None
                 and self.control_arm_idx is not None
                 and arm_idx != self.control_arm_idx):
+            control_mean_prev = self.emp_means[self.control_arm_idx]
+            control_var_prev = self.emp_vars[self.control_arm_idx]
+            control_count_prev = self.counts[self.control_arm_idx]
+
+        # Update test arm first with F_{t-1}-measurable prev control stats
+        self._update_stats(arm_idx, observation, x_control=x_control,
+                           control_mean_prev=control_mean_prev,
+                           control_var_prev=control_var_prev,
+                           control_count_prev=control_count_prev)
+        self.counts[arm_idx] += 1
+
+        # THEN update control arm
+        if control_mean_prev is not None:
             self._update_stats(self.control_arm_idx, x_control)
             self.counts[self.control_arm_idx] += 1
 
-        self._update_stats(arm_idx, observation, x_control=x_control)
-        self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy())
 
