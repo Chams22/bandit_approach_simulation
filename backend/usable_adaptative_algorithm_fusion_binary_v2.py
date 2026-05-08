@@ -279,7 +279,7 @@ class JamiesonJainAlgo:
                                      for i in range(self.n) if i != self.control_arm_idx]
                 p_values_with_idx.sort(key=lambda x: x[0])
                 for k in range(len(p_values_with_idx), 0, -1):
-                    if p_values_with_idx[k - 1][0] <= self.delta * k / self.n:
+                    if p_values_with_idx[k - 1][0] <= self.delta * k / (self.n - 1):
                         for rank in range(k):
                             current_St.add(p_values_with_idx[rank][1])
                         break
