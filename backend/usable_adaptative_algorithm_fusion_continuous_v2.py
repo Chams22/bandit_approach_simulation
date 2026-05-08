@@ -85,8 +85,8 @@ class JamiesonJainAlgo:
                 # Clip: |lambda| <= 1/(2*sigma_hat) to keep increments bounded
                 max_lam = 1.0 / (2.0 * np.sqrt(sigma2_prev))
                 lam = np.clip(lam, 0.0, max_lam)
-                # Sub-Gaussian GROW: lambda*(X - mu_0) - lambda^2 * sigma_hat^2 / 2
-                increment = lam * (observation - self.mu_0) - lam ** 2 * sigma2_prev / 2.0
+                # Sub-Gaussian GROW: lambda*(X - mu_ref) - lambda^2 * sigma_hat^2 / 2
+                increment = lam * (observation - mu0_ref) - lam ** 2 * sigma2_prev / 2.0
                 self.log_martingale[arm_idx] += increment
 
         # --- Update mean ---
