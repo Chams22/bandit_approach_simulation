@@ -11,7 +11,7 @@ from tqdm import tqdm
 # -----------------------------------------------------------------------------
 
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='betting', control_arm_idx=None):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2', control_arm_idx=None):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -319,7 +319,7 @@ class JamiesonJainAlgo:
 # UNIFORM ALGORITHM
 # =============================================================================
 class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='betting'):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2'):
         """
         Uniform (random) sampling algorithm with the same CS options.
         """
@@ -526,7 +526,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
-                   rho=0.01, cs_type='betting'):
+                   rho=0.01, cs_type='nm_m2'):
     """
     Runs the bandit experiment using pre-generated data.
 
