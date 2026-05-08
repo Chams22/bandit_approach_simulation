@@ -2,9 +2,9 @@ import pandas as pd
 import numpy as np
 import os
 import importlib
-import usable_adaptative_algorithm_fusion_binary_v2 as usable_adaptative_algorithm_fusion_binary
+import usable_adaptative_algorithm_fusion_binary_v3 as usable_adaptative_algorithm_fusion_binary
 importlib.reload(usable_adaptative_algorithm_fusion_binary)
-import usable_adaptative_algorithm_fusion_continuous_v2 as usable_adaptative_algorithm_fusion_continuous
+import usable_adaptative_algorithm_fusion_continuous_v3 as usable_adaptative_algorithm_fusion_continuous
 importlib.reload(usable_adaptative_algorithm_fusion_continuous)
 import matplotlib.pyplot as plt
 from statistics import mean, variance

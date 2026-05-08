@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 class JamiesonJainAlgo:
     def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2',
-                 control_arm_idx=None, control_delta_fraction=0.1):
+                 control_arm_idx=None, control_delta_fraction=0.3):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -533,7 +533,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
-                   rho=0.01, cs_type='nm_m2', control_delta_fraction=0.1):
+                   rho=0.01, cs_type='nm_m2', control_delta_fraction=0.3):
     """
     Runs the bandit experiment.
 
@@ -569,7 +569,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         'normal_mixture', 'nm_m2', or 'betting'. Default: 'nm_m2'.
     control_delta_fraction : float
         Fraction of delta reserved for the global control bound in two-sample
-        NM mode. Default: 0.1.
+        NM mode. Default: 0.3.
 
     Returns
     -------
