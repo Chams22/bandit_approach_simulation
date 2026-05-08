@@ -2,9 +2,9 @@ import pandas as pd
 import numpy as np
 import os
 import importlib
-import usable_adaptative_algorithm_fusion_binary
+import usable_adaptative_algorithm_fusion_binary_v2 as usable_adaptative_algorithm_fusion_binary
 importlib.reload(usable_adaptative_algorithm_fusion_binary)
-import usable_adaptative_algorithm_fusion_continuous
+import usable_adaptative_algorithm_fusion_continuous_v2 as usable_adaptative_algorithm_fusion_continuous
 importlib.reload(usable_adaptative_algorithm_fusion_continuous)
 import matplotlib.pyplot as plt
 from statistics import mean, variance
@@ -189,7 +189,7 @@ if __name__ == "__main__":
         # horizon = min_len*10
         horizon = sum([len(arm) for arm in data_test[0]])
         n_arms = len(arm_test)
-        init_nb = round(min_len*0.1)
+        init_nb = round(min_len*0.6)
         init_choice = True
         mu_0_unif=mean(data_test[0][control_arm])
         print("mu_0 moyenne calcule", mu_0_unif)
