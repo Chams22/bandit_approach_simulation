@@ -3,6 +3,7 @@ from tqdm import tqdm
 
 _MIN_PULLS_BEFORE_FILTER = 10
 _EPSILON_RECHECK = 0.02
+_CONTROL_PHI_RATIO = 1.0
 
 # -----------------------------------------------------------------------------
 # Adapted for Binary (Bernoulli) Data — V3
@@ -640,6 +641,16 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
         arm = algo.select_arm()
 
+        # Override: pull control solo when its phi dominates treatment phis
+        if arm != "stop" and variable_mu_choice and control_arm is not None:
+            phi_ctrl = algo.phi(algo.counts[control_arm], algo.delta,
+                                algo.emp_vars[control_arm])
+            treat_phis = [algo.phi(algo.counts[i], algo.delta, algo.emp_vars[i])
+                          for i in range(n_arms)
+                          if i != control_arm and i not in algo.S_t and algo.counts[i] > 0]
+            if treat_phis and phi_ctrl > _CONTROL_PHI_RATIO * float(np.median(treat_phis)):
+                arm = control_arm
+
         if arm == "stop":
             remaining_steps = horizon - len(run_pr)
             last_pr = run_pr[-1] if run_pr else 0
@@ -661,6 +672,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             all_arm_counts[arm] += 1
 
             # Paired pull: draw a control arm observation at the same step
+            # (skipped when arm == control_arm, which is the solo control pull case)
             x_control = None
             if variable_mu_choice and arm != control_arm:
                 len_ctrl = len(all_arm_data[no_sim][control_arm])

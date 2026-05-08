@@ -3,6 +3,7 @@ from tqdm import tqdm
 
 _MIN_PULLS_BEFORE_FILTER = 10
 _EPSILON_RECHECK = 0.02
+_CONTROL_PHI_RATIO = 1.0
 
 # -----------------------------------------------------------------------------
 # Adapted for Binary (Bernoulli) Data
@@ -498,15 +499,16 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     # --- Main loop ---
     for t in range(0, horizon):
 
-        # Select arm
-        if mode == 'adaptive' and variable_mu_choice:
-            # Two-sample mode: mu_0 update handled internally via control_arm_idx
-            arm = algo.select_arm()
-            # Force the draw of the control arm to reduce its uncertainty
-            if all_arm_counts[control_arm] < max(all_arm_counts):
+        arm = algo.select_arm()
+        # Override: pull control solo when its phi dominates treatment phis
+        if arm != "stop" and variable_mu_choice and control_arm is not None:
+            phi_ctrl = algo.phi(algo.counts[control_arm], algo.delta,
+                                algo.emp_vars[control_arm])
+            treat_phis = [algo.phi(algo.counts[i], algo.delta, algo.emp_vars[i])
+                          for i in range(n_arms)
+                          if i != control_arm and i not in algo.S_t and algo.counts[i] > 0]
+            if treat_phis and phi_ctrl > _CONTROL_PHI_RATIO * float(np.median(treat_phis)):
                 arm = control_arm
-        else:
-            arm = algo.select_arm()
 
         if arm == "stop":
             print("stop triggered")
