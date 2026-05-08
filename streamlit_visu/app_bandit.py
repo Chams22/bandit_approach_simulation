@@ -35,11 +35,32 @@ parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from backend import usable_adaptative_algorithm
+from backend import usable_adaptative_algorithm  # module de base (toujours chargé)
 
 # Recharge uniquement en dev (mettre DEV_MODE=1 dans l'env pour activer)
 if os.environ.get("DEV_MODE") == "1":
     importlib.reload(usable_adaptative_algorithm)
+
+# --- Mapping des algorithmes disponibles --------------------------------------
+ALGO_OPTIONS = {
+    "Standard (original)": "usable_adaptative_algorithm",
+    "Fusion v2 — Continue": "usable_adaptative_algorithm_fusion_continuous_v2",
+    "Fusion v2 — Binaire":  "usable_adaptative_algorithm_fusion_binary_v2",
+    "Fusion v3 — Continue": "usable_adaptative_algorithm_fusion_continuous_v3",
+    "Fusion v3 — Binaire":  "usable_adaptative_algorithm_fusion_binary_v3",
+}
+
+def load_algo_module(algo_name: str):
+    """Importe dynamiquement le module backend choisi."""
+    module_name = ALGO_OPTIONS[algo_name]
+    full_name = f"backend.{module_name}"
+    try:
+        mod = importlib.import_module(full_name)
+        if os.environ.get("DEV_MODE") == "1":
+            importlib.reload(mod)
+        return mod, None
+    except ImportError as e:
+        return usable_adaptative_algorithm, str(e)  # fallback sur le standard
 
 # --- Configuration de la page --------------------------------------------------
 st.set_page_config(
@@ -156,9 +177,11 @@ def prepare_experiment(true_means, horizon, n_sims, scale, dist_type):
     return all_arm_data_by_sim
 
 
-def run_single_experiment(cfg, dist_type):
+def run_single_experiment(cfg, dist_type, algo_module=None):
     """Exécute uniform + adaptive pour une config donnée. Retourne un dict
     avec tout ce qu'il faut pour l'affichage et la sauvegarde."""
+    if algo_module is None:
+        algo_module = usable_adaptative_algorithm
     true_means = cfg['true_means']
     n_arms = cfg['n_arms']
     horizon = cfg['horizon']
@@ -175,7 +198,7 @@ def run_single_experiment(cfg, dist_type):
     # Uniform
     (tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif,
      np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = \
-        usable_adaptative_algorithm.run_experiment(
+        algo_module.run_experiment(
             true_means, 0, delta, horizon + init_nb, 'uniform',
             all_arm_data, n_sims, control_arm, 0, False, False, True,
         )
@@ -183,7 +206,7 @@ def run_single_experiment(cfg, dist_type):
     # Adaptive
     (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
      np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = \
-        usable_adaptative_algorithm.run_experiment(
+        algo_module.run_experiment(
             true_means, 0, delta, horizon, 'adaptive',
             all_arm_data, n_sims, control_arm, init_nb, init_choice, False, True,
         )
@@ -259,7 +282,9 @@ def plot_confidence_intervals_schematic(true_means, final_counts, mu_0, delta, h
     exposées par le backend actuellement.
     """
     n_arms = len(true_means)
-    tmp = usable_adaptative_algorithm.UniformAlgo(n_arms, mu_0, delta)
+    # UniformAlgo peut ne pas exister dans tous les modules — fallback sur le standard
+    _base = usable_adaptative_algorithm
+    tmp = _base.UniformAlgo(n_arms, mu_0, delta)
 
     fig, ax = plt.subplots(figsize=(10, 6))
     for i in range(n_arms):
@@ -541,6 +566,18 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Paramètres de simulation")
 
+    st.subheader("Algorithme backend")
+    algo_choice = st.selectbox(
+        "Version de l'algorithme",
+        options=list(ALGO_OPTIONS.keys()),
+        help=(
+            "Standard : algorithme original (Jamieson & Jain).\n"
+            "Fusion v2/v3 : versions étendues avec Normal Mixture CS.\n"
+            "→ Choisir Continue pour les lois normales, Binaire pour les lois de Bernoulli."
+        ),
+    )
+    st.markdown("---")
+
     st.subheader("Distribution des récompenses")
     dist_type = st.radio(
         "Type de loi", ["Normale", "Binomiale"],
@@ -613,6 +650,7 @@ def current_cfg():
         "n_arms": int(n_arms),
         "true_means": np.array(true_means),
         "dist_type": dist_type,
+        "algo_name": algo_choice,   # ← nom de l'algo sélectionné
     }
 
 # =============================================================================
@@ -621,8 +659,13 @@ def current_cfg():
 
 if run_button:
     cfg = current_cfg()
+    algo_module, import_err = load_algo_module(cfg["algo_name"])
+    if import_err:
+        st.warning(f"⚠️ Module '{cfg['algo_name']}' introuvable — fallback sur Standard.\n\n`{import_err}`")
+    else:
+        st.caption(f"🧠 Algorithme chargé : **{cfg['algo_name']}**")
     with st.spinner("Simulation en cours..."):
-        result = run_single_experiment(cfg, dist_type)
+        result = run_single_experiment(cfg, dist_type, algo_module)
     st.session_state.single_result = result
     st.session_state.single_cfg = cfg
     st.success("✅ Simulation terminée avec succès !")
@@ -697,7 +740,10 @@ if st.session_state.run_batch_requested and st.session_state.test_configs:
         global_status.info(f"⏳ Test {test_idx + 1}/{len(configs_to_run)} en cours...")
         global_progress.progress(test_idx / len(configs_to_run))
 
-        result = run_single_experiment(cfg, cfg['dist_type'])
+        result = run_single_experiment(
+            cfg, cfg['dist_type'],
+            load_algo_module(cfg.get("algo_name", "Standard (original)"))[0]
+        )
 
         # Sauvegarde auto
         saved_path = save_test_results(test_idx + 1, cfg, result)
