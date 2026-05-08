@@ -11,7 +11,8 @@ from tqdm import tqdm
 # -----------------------------------------------------------------------------
 
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2', control_arm_idx=None):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2',
+                 control_arm_idx=None, control_delta_fraction=0.1):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -34,6 +35,9 @@ class JamiesonJainAlgo:
         control_arm_idx : int or None
             If set, enables two-sample CS mode: tests mu_arm - mu_control > 0
             instead of mu_arm > mu_0. Default: None (single-sample mode).
+        control_delta_fraction : float
+            Fraction of delta reserved for a global control bound in two-sample
+            NM mode. The remaining budget is used by BH over treatment arms.
         """
         self.n = n_arms
         self.mu_0 = mu_0
@@ -41,6 +45,9 @@ class JamiesonJainAlgo:
         self.rho = rho
         self.cs_type = cs_type
         self.control_arm_idx = control_arm_idx
+        if not 0.0 < control_delta_fraction < 1.0:
+            raise ValueError("control_delta_fraction must be between 0 and 1.")
+        self.control_delta_fraction = control_delta_fraction
 
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
@@ -280,10 +287,15 @@ class JamiesonJainAlgo:
                             current_St.add(p_values_with_idx[rank][1])
                         break
             else:
-                # Two-sample NM LCB
-                for k in range(self.n, 0, -1):
-                    effective_delta = self.delta * k / self.n
-                    phi_ctrl = self.phi(self.counts[self.control_arm_idx], effective_delta, self.emp_vars[self.control_arm_idx])
+                # Two-sample NM LCB with one global control bound.
+                n_tested = self.n - 1
+                delta_control = self.control_delta_fraction * self.delta
+                delta_treat = (1.0 - self.control_delta_fraction) * self.delta
+                phi_ctrl = self.phi(self.counts[self.control_arm_idx],
+                                    delta_control,
+                                    self.emp_vars[self.control_arm_idx])
+                for k in range(n_tested, 0, -1):
+                    effective_delta = delta_treat * k / n_tested
                     passing_arms = [
                         i for i in range(self.n)
                         if i != self.control_arm_idx
@@ -521,7 +533,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
-                   rho=0.01, cs_type='nm_m2'):
+                   rho=0.01, cs_type='nm_m2', control_delta_fraction=0.1):
     """
     Runs the bandit experiment.
 
@@ -555,6 +567,9 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         NM tuning parameter (ignored for betting). Default: 0.01.
     cs_type : str
         'normal_mixture', 'nm_m2', or 'betting'. Default: 'nm_m2'.
+    control_delta_fraction : float
+        Fraction of delta reserved for the global control bound in two-sample
+        NM mode. Default: 0.1.
 
     Returns
     -------
@@ -577,14 +592,15 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     # --- Algo factory ---
     algo_factory = {
         'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
-                                             control_arm_idx=control_arm if variable_mu_choice else None),
+                                             control_arm_idx=control_arm if variable_mu_choice else None,
+                                             control_delta_fraction=control_delta_fraction),
         'uniform': lambda: UniformAlgo(n_arms, mu_0, delta, rho=rho, cs_type=cs_type),
     }
 
     if mode not in algo_factory:
         raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
 
-    print(f"Simulation Mode: {mode.upper()} | CS: {cs_type} | rho={rho} ({n_simulations} runs)")
+    print(f"Simulation Mode: {mode.upper()} | CS: {cs_type} | rho={rho} | control_delta_fraction={control_delta_fraction} ({n_simulations} runs)")
 
     # --- Simulation loop ---
     for no_sim in tqdm(range(n_simulations)):
