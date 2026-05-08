@@ -203,7 +203,9 @@ class JamiesonJainAlgo:
 
         for i in candidates:
             if self.control_arm_idx is not None:
-                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) + self.phi(self.counts[i], self.delta, self.emp_vars[i])
+                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
+                      + self.phi(self.counts[i], self.delta, self.emp_vars[i]) \
+                      + self.phi(self.counts[self.control_arm_idx], self.delta, self.emp_vars[self.control_arm_idx])
             else:
                 ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
             if ucb > best_ucb:
