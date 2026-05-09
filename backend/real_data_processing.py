@@ -10,13 +10,18 @@ from statistics import mean, variance
 import re
 
 
-# Choix facile de l'implémentation à lancer:
+# Choix facile des implémentations à lancer:
 #   "simple" -> adaptative_algorithm.py
 #   "v2"     -> module V2 fusionné NM/NM_M2
 #   "v3"     -> continuous_v3 / binary_v3
 #   "sr"     -> successive rejects + même interface que les autres
 #   "all"    -> lance simple, v2, v3 et sr dans des dossiers séparés
-RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "all").lower()
+# Tu peux modifier cette liste directement, ou utiliser:
+#   REAL_DATA_ALGO="v2"
+#   REAL_DATA_ALGOS="simple,v2"
+#   REAL_DATA_ALGO="all"
+DEFAULT_RUN_ALGOS = ["v2", "v3"]
+HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
 
 ALGORITHM_CONFIGS = {
     "simple": {
@@ -41,20 +46,40 @@ ALGORITHM_CONFIGS = {
     },
 }
 
-if __name__ == "__main__" and RUN_ALGO == "all":
+def parse_run_algos(raw_value):
+    if raw_value is None or raw_value.strip() == "":
+        return list(DEFAULT_RUN_ALGOS)
+
+    normalized = raw_value.lower().replace(";", ",").replace(" ", ",")
+    selected = [item.strip() for item in normalized.split(",") if item.strip()]
+    if selected == ["all"]:
+        return list(ALGORITHM_CONFIGS.keys())
+    return selected
+
+
+RUN_ALGOS = parse_run_algos(
+    os.environ.get("REAL_DATA_ALGOS", os.environ.get("REAL_DATA_ALGO"))
+)
+
+invalid_algos = [algo for algo in RUN_ALGOS if algo not in ALGORITHM_CONFIGS]
+if invalid_algos:
+    valid = ", ".join([*ALGORITHM_CONFIGS.keys(), "all"])
+    raise ValueError(
+        f"Unknown REAL_DATA_ALGO(S)={invalid_algos!r}. Choose one or more of: {valid}"
+    )
+
+if __name__ == "__main__" and len(RUN_ALGOS) > 1:
     script_path = os.path.abspath(__file__)
-    for algo_key in ALGORITHM_CONFIGS:
+    for algo_key in RUN_ALGOS:
         print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
         env = os.environ.copy()
         env["REAL_DATA_ALGO"] = algo_key
+        env.pop("REAL_DATA_ALGOS", None)
         subprocess.run([sys.executable, script_path], cwd=os.path.dirname(script_path),
                        env=env, check=True)
     sys.exit(0)
 
-if RUN_ALGO not in ALGORITHM_CONFIGS:
-    valid = ", ".join([*ALGORITHM_CONFIGS.keys(), "all"])
-    raise ValueError(f"Unknown RUN_ALGO={RUN_ALGO!r}. Choose one of: {valid}")
-
+RUN_ALGO = RUN_ALGOS[0]
 ACTIVE_ALGO_CONFIG = ALGORITHM_CONFIGS[RUN_ALGO]
 if ACTIVE_ALGO_CONFIG["binary_module"] == ACTIVE_ALGO_CONFIG["continuous_module"]:
     usable_module = importlib.import_module(ACTIVE_ALGO_CONFIG["binary_module"])
@@ -179,6 +204,7 @@ if __name__ == "__main__":
     print(f"Continuous module: {ACTIVE_ALGO_CONFIG['continuous_module']}")
     print(f"Binary module: {ACTIVE_ALGO_CONFIG['binary_module']}")
     print(f"Output directory: {output_root}\n")
+    print(f"History record every: {HISTORY_RECORD_EVERY} step(s)\n")
     plt.close('all')
     
     # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
@@ -186,7 +212,7 @@ if __name__ == "__main__":
     n_sims = 1
 
     datasets = {
-    "effort": (df_effort, 59),
+    "effort": (df_effort, "min_mean"),
     "exercise": (df_exercise, 53),
     "penn": (df_penn, 16),
     "walmart": (df_walmart, 3)
@@ -199,11 +225,17 @@ if __name__ == "__main__":
         print(f"Préparation de {name}...")
         # Appel de la fonction
         data_sim, arm_names = prepare_real_experiment(df[0], n_sims)
+        control_arm = df[1]
+        if control_arm == "min_mean":
+            arm_means = [mean(arm_data) for arm_data in data_sim[0]]
+            control_arm = int(np.argmin(arm_means))
+            print(f"   -> Contrôle auto min mean: arm {control_arm} ({arm_names[control_arm]}) "
+                  f"mean={arm_means[control_arm]:.4f}")
         # Stockage
         results[name] = {
             "data": data_sim,       # La liste de listes de listes
             "arm_names": arm_names,  # Pour savoir que l'index 0 correspond à tel bras
-            "control_arm": df[1]
+            "control_arm": control_arm
         }
         # Vérification rapide
         print(f"   -> {len(data_sim)} simulations générées.")
@@ -218,7 +250,7 @@ if __name__ == "__main__":
 
     # data_effort = results['effort']['data']
     # arm_effort = results['effort']['arm_names']
-    # control_arm = 59
+    # control_arm = min mean arm
 
     # data_walmart = results['walmart']['data']
     # arm_walmart = results['walmart']['arm_names']
@@ -522,15 +554,15 @@ if __name__ == "__main__":
         is_true_mean=False
         # 1. Run Simulations
         if type_de_loi=="normal":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
         elif type_de_loi=="bernouilli":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
         
 
         with open(dataset_output_dir / "resultats.txt", "w", encoding="utf-8") as f:
@@ -547,6 +579,19 @@ if __name__ == "__main__":
             f.write("   ADAPT VAR\n")
             for i, element in enumerate(l_pos_adapt_v, 1):
                 f.write(f"{i}. {element}\n")
+
+        with open(dataset_output_dir / "discovery_times.txt", "w", encoding="utf-8") as f:
+            f.write("First discovery time by simulation and arm\n\n")
+            for mode_name, discovery_list in [
+                ("UNIF", discovery_unif),
+                ("UNIF VAR", discovery_unif_v),
+                ("ADAPT", discovery_adapt),
+                ("ADAPT VAR", discovery_adapt_v),
+            ]:
+                f.write(f"   {mode_name}\n")
+                for sim_idx, discovery_dict in enumerate(discovery_list, 1):
+                    ordered = dict(sorted(discovery_dict.items()))
+                    f.write(f"{sim_idx}. {ordered}\n")
 
         print("pos unif:", l_pos_unif)
         print("pos unif v:", l_pos_unif_v)
@@ -644,14 +689,189 @@ if __name__ == "__main__":
                          (liste_adapt, "adapt"), (liste_adapt_var, "adapt var")]
         plot_detection_comparison(liste_vrai_positif, detectes_list, range(len(arm_test)), arm_test_clean, name_data)
 
+        def summarize_discovery_times(discovery_list, positive_arms):
+            summary = {}
+            for arm_idx in positive_arms:
+                found_times = [disc[arm_idx] for disc in discovery_list if arm_idx in disc]
+                summary[arm_idx] = {
+                    "mean_time": float(np.mean(found_times)) if found_times else np.nan,
+                    "found_rate": len(found_times) / len(discovery_list) if discovery_list else 0.0,
+                }
+            return summary
+
+        def plot_positive_rank_vs_discovery_time(
+            positive_arms, arm_names, all_data, discovery_by_mode, horizon, output_path
+        ):
+            if not positive_arms:
+                return
+
+            empirical_means = np.array([float(np.mean(values)) for values in all_data])
+            ranked_arms = sorted(range(len(empirical_means)),
+                                 key=lambda idx: empirical_means[idx],
+                                 reverse=True)
+            rank_by_arm = {arm_idx: rank + 1 for rank, arm_idx in enumerate(ranked_arms)}
+            positives_sorted = sorted(positive_arms, key=lambda idx: rank_by_arm[idx])
+            y_ranks = [rank_by_arm[idx] for idx in positives_sorted]
+
+            summaries_by_mode = {
+                mode_name: summarize_discovery_times(discovery_list, positives_sorted)
+                for mode_name, discovery_list in discovery_by_mode
+            }
+
+            panels = [
+                ("CLASSIQUE", [("unif", "Uniform", "#7f7f7f", -0.10),
+                               ("adapt", "Adaptive", "#2ca02c", 0.10)]),
+                ("VAR", [("unif var", "Uniform Var", "#7f7f7f", -0.10),
+                         ("adapt var", "Adaptive Var", "#2ca02c", 0.10)]),
+            ]
+
+            all_found_times = []
+            for summary in summaries_by_mode.values():
+                all_found_times.extend(
+                    item["mean_time"] for item in summary.values()
+                    if not np.isnan(item["mean_time"])
+                )
+
+            if all_found_times:
+                max_found_time = max(all_found_times)
+                missed_x = max_found_time * 1.10
+                x_top = max_found_time * 1.18
+            else:
+                missed_x = horizon
+                x_top = horizon * 1.08
+
+            x_bottom = 0
+            if all_found_times:
+                x_bottom = max(0, min(all_found_times) - 0.08 * max_found_time)
+
+            rows_for_csv = []
+
+            fig, axes = plt.subplots(
+                1, len(panels),
+                figsize=(8.5 * len(panels), 6.2),
+                sharey=True,
+                constrained_layout=True,
+            )
+            if len(panels) == 1:
+                axes = [axes]
+
+            for ax, (panel_title, panel_modes) in zip(axes, panels):
+                label_positions = {}
+                stats_lines = []
+
+                for mode_name, pretty_name, color, y_offset in panel_modes:
+                    summary = summaries_by_mode[mode_name]
+                    found_count = 0
+                    missed_count = 0
+
+                    for arm_idx in positives_sorted:
+                        item = summary[arm_idx]
+                        is_found = not np.isnan(item["mean_time"])
+                        x = item["mean_time"] if is_found else missed_x
+                        y = rank_by_arm[arm_idx] + y_offset
+                        size = 65 + 140 * item["found_rate"]
+
+                        rows_for_csv.append({
+                            "mode": mode_name,
+                            "arm": arm_idx,
+                            "arm_name": arm_names[arm_idx],
+                            "empirical_rank": rank_by_arm[arm_idx],
+                            "empirical_mean": empirical_means[arm_idx],
+                            "mean_discovery_time": item["mean_time"],
+                            "found_rate": item["found_rate"],
+                        })
+
+                        if is_found:
+                            found_count += 1
+                            ax.scatter(x, y, s=size, color=color, marker="o",
+                                       edgecolor="black", linewidth=0.6,
+                                       alpha=0.58, zorder=3,
+                                       label=pretty_name if arm_idx == positives_sorted[0] else "_nolegend_")
+                            if arm_idx not in label_positions:
+                                label_positions[arm_idx] = (x, rank_by_arm[arm_idx])
+                        else:
+                            missed_count += 1
+                            ax.scatter(x, y, s=50, color=color, marker="x",
+                                       linewidth=1.4, alpha=0.72, zorder=3,
+                                       label=f"{pretty_name} not found" if arm_idx == positives_sorted[0] else "_nolegend_")
+
+                    stats_lines.append(f"{pretty_name}: {found_count}/{len(positives_sorted)}")
+
+                for arm_idx, (x, y) in label_positions.items():
+                    ax.annotate(str(arm_idx), (x, y), xytext=(4, 4),
+                                textcoords="offset points", fontsize=7, color="black")
+
+                ax.axvline(missed_x, color="red", linestyle=":", linewidth=1.3)
+                ax.text(0.98, 0.98, "\n".join(stats_lines),
+                        transform=ax.transAxes, ha="right", va="top",
+                        fontsize=9, bbox=dict(facecolor="white", edgecolor="none", alpha=0.75))
+                ax.set_title(panel_title)
+                ax.set_xlabel("First discovery time (mean over simulations)")
+                ax.grid(True, alpha=0.3)
+                ax.set_xlim(x_bottom, x_top)
+                ax.set_ylim(max(y_ranks) + 0.5, min(y_ranks) - 0.5)
+
+            axes[0].set_ylabel("Empirical mean rank (1 = highest)")
+            handles = [
+                plt.Line2D([0], [0], marker="o", color="w",
+                           markerfacecolor="#7f7f7f", markeredgecolor="black",
+                           alpha=0.58, markersize=8, label="Uniform"),
+                plt.Line2D([0], [0], marker="o", color="w",
+                           markerfacecolor="#1eff1e", markeredgecolor="black",
+                           alpha=0.58, markersize=8, label="Adaptive"),
+                plt.Line2D([0], [0], marker="x", color="black",
+                           linestyle="None", markersize=8, label="not found"),
+            ]
+            fig.legend(handles=handles, loc="lower center", ncol=3,
+                       bbox_to_anchor=(0.5, -0.04))
+            fig.suptitle(f"Detected arms: discovery time vs empirical rank ({name_data})",
+                         fontsize=14, fontweight="bold")
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            plt.close()
+
+            pd.DataFrame(rows_for_csv).to_csv(
+                output_path.with_suffix(".csv"), index=False
+            )
+
+        discovery_by_mode = [
+            ("unif", discovery_unif),
+            ("unif var", discovery_unif_v),
+            ("adapt", discovery_adapt),
+            ("adapt var", discovery_adapt_v),
+        ]
+        arms_for_rank_plot = set(liste_vrai_positif)
+        for _, discovery_list in discovery_by_mode:
+            for discovery_dict in discovery_list:
+                arms_for_rank_plot.update(discovery_dict.keys())
+        arms_for_rank_plot.discard(control_arm)
+        plot_positive_rank_vs_discovery_time(
+            sorted(arms_for_rank_plot), arm_test_clean, data_test[0],
+            discovery_by_mode, horizon, dataset_output_dir / "figure7_rank_vs_discovery.png"
+        )
+
+        history_steps = np.array(
+            [0] + [
+                step for step in range(1, horizon + 1)
+                if step == horizon or step % HISTORY_RECORD_EVERY == 0
+            ]
+        )
+
+        def time_axis_for(arr):
+            length = arr.shape[0] if hasattr(arr, "shape") else len(arr)
+            if length == len(history_steps):
+                return history_steps
+            if length == len(history_steps) - 1:
+                return history_steps[1:]
+            return np.linspace(0, horizon, length)
+
         # --- PLOT 1: pr ---
         plt.figure(1+num_graph*10, figsize=(10, 5))
         classic_color = '#ff7f0e'
         var_color = '#1f77b4'
-        plt.plot(pnb_adapt, label='Adaptive', color=classic_color, linewidth=2)
-        plt.plot(pnb_unif, label='Uniform', color=classic_color, linestyle='--')
-        plt.plot(pnb_adapt_v, label='Adaptive_Var', color=var_color, linewidth=2)
-        plt.plot(pnb_unif_v, label='Uniform_Var', color=var_color, linestyle='--')
+        plt.plot(pnb_adapt, label='Adaptive', color=classic_color, linewidth=2, alpha=0.7)
+        plt.plot(pnb_unif, label='Uniform', color=classic_color, linestyle='--', alpha=0.7)
+        plt.plot(pnb_adapt_v, label='Adaptive_Var', color=var_color, linewidth=2, alpha=0.7)
+        plt.plot(pnb_unif_v, label='Uniform_Var', color=var_color, linestyle='--', alpha=0.7)
         plt.axhline(y=1.0, color='gray', linestyle=':')
         plt.title("Discovery speed (pr)")
         plt.legend()
@@ -704,7 +924,7 @@ if __name__ == "__main__":
                     alpha = 0.2
                     label = "_nolegend_" # Ignore ce bras dans la légende
                     
-                ax.plot(data_mean[:, arm_idx], label=label, linewidth=linewidth, 
+                ax.plot(time_axis_for(data_mean), data_mean[:, arm_idx], label=label, linewidth=linewidth, 
                         linestyle=linestyle, color=color, alpha=alpha)
             
             ax.set_xlabel("Time (t)")
@@ -752,11 +972,11 @@ if __name__ == "__main__":
 
             # Tracer les simulations individuelles (spaghetti)
             for sim_counts in counts_adapt_list:
-                plt.plot(sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
+                plt.plot(time_axis_for(sim_counts), sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
                         linewidth=0.5, linestyle=linestyle)
 
             # Tracer la moyenne par-dessus
-            plt.plot(counts_adapt_mean[:, arm_idx], label=label, color=base_color, 
+            plt.plot(time_axis_for(counts_adapt_mean), counts_adapt_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
         plt.xlabel("Time (t)", fontsize=12)
@@ -799,10 +1019,10 @@ if __name__ == "__main__":
                 label = "_nolegend_"
 
             for sim_counts in counts_unif_v_list:
-                plt.plot(sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha,
+                plt.plot(time_axis_for(sim_counts), sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha,
                          linewidth=0.5, linestyle=linestyle)
 
-            plt.plot(counts_unif_v_mean[:, arm_idx], label=label, color=base_color,
+            plt.plot(time_axis_for(counts_unif_v_mean), counts_unif_v_mean[:, arm_idx], label=label, color=base_color,
                      linewidth=mean_linewidth, linestyle=linestyle)
 
         plt.xlabel("Time (t)", fontsize=12)
@@ -845,11 +1065,11 @@ if __name__ == "__main__":
 
             # Tracer les simulations individuelles (spaghetti) depuis la liste VAR
             for sim_counts in counts_adapt_v_list:
-                plt.plot(sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
+                plt.plot(time_axis_for(sim_counts), sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
                         linewidth=0.5, linestyle=linestyle)
 
             # Tracer la moyenne par-dessus
-            plt.plot(counts_adapt_v_mean[:, arm_idx], label=label, color=base_color, 
+            plt.plot(time_axis_for(counts_adapt_v_mean), counts_adapt_v_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
         plt.xlabel("Time (t)", fontsize=12)
@@ -906,7 +1126,7 @@ if __name__ == "__main__":
                     alpha = 0.3
                     label = "_nolegend_"
                     
-                ax.plot(data[:, arm_idx], label=label, color=color, linewidth=linewidth, 
+                ax.plot(time_axis_for(data), data[:, arm_idx], label=label, color=color, linewidth=linewidth, 
                         linestyle=linestyle, alpha=alpha)
             
             # LE CHANGEMENT LE PLUS IMPORTANT : Échelle logarithmique
@@ -961,10 +1181,10 @@ if __name__ == "__main__":
             ax.set_title(f"P-values evolution for Arm {arm_name}")
 
             # Tracé des 3 trajectoires sur le MÊME graphique
-            ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
-            ax.plot(np_p_value_mean_unif_v[:, arm_idx], label="Uniform VAR", linewidth=2, color=color_unif_v)
-            ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
-            ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
+            ax.plot(time_axis_for(np_p_value_mean_unif), np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
+            ax.plot(time_axis_for(np_p_value_mean_unif_v), np_p_value_mean_unif_v[:, arm_idx], label="Uniform VAR", linewidth=2, color=color_unif_v)
+            ax.plot(time_axis_for(np_p_value_mean_adapt), np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
+            ax.plot(time_axis_for(np_p_value_mean_adapt_v), np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
             
             ax.set_ylabel("P value")
             ax.legend(loc="upper right", fontsize="small")

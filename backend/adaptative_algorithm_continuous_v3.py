@@ -569,9 +569,14 @@ class UniformAlgo:
 # =============================================================================
 # SIMULATION ENGINE
 # =============================================================================
+def _should_record_history(step, horizon, history_record_every):
+    return step == horizon or step % history_record_every == 0
+
+
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                            control_arm, init_nb, init_choice, variable_mu_choice,
-                           n_arms, is_true_mean, true_positives):
+                           n_arms, is_true_mean, true_positives,
+                           history_record_every=1):
     """
     Runs a single simulation for a given algorithm instance.
 
@@ -582,6 +587,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     p_values_list = []
     all_arm_counts = [0 for _ in range(n_arms)]
     run_pr = []
+    history_record_every = max(1, int(history_record_every))
 
     # --- Init ---
     if init_choice:
@@ -594,13 +600,16 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             all_arm_counts = [init_nb for _ in range(n_arms)]
             algo.counts_evolution = [algo.counts.copy()]
 
+    discovery_times = {int(arm): 0 for arm in algo.S_t}
+
     # --- Main loop ---
     for t in range(0, horizon):
 
         arm = algo.select_arm()
 
         if arm == "stop":
-            remaining_steps = horizon - len(run_pr)
+            current_done = len(run_pr)
+            remaining_steps = horizon - current_done
             if is_true_mean:
                 nb_found = len(algo.S_t.intersection(true_positives))
                 last_pr = nb_found / len(true_positives) if true_positives else 1.0
@@ -608,11 +617,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 last_pr = len(algo.S_t)
             run_pr.extend([last_pr] * remaining_steps)
             last_counts = algo.counts_evolution[-1]
-            for _ in range(remaining_steps):
-                algo.counts_evolution.append(last_counts.copy())
+            for step in range(current_done + 1, horizon + 1):
+                if _should_record_history(step, horizon, history_record_every):
+                    algo.counts_evolution.append(last_counts.copy())
             last_p_values = p_values_list[-1] if p_values_list else [1.0] * n_arms
-            for _ in range(remaining_steps):
-                p_values_list.append(list(last_p_values))
+            for step in range(current_done + 1, horizon + 1):
+                if _should_record_history(step, horizon, history_record_every):
+                    p_values_list.append(list(last_p_values))
             break
 
         else:
@@ -633,8 +644,15 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                     x_control = all_arm_data[no_sim][control_arm][all_arm_counts[control_arm]]
                 all_arm_counts[control_arm] += 1
 
+            current_step = len(run_pr) + 1
             p_values_t = algo.bh_update_optimized(arm, observation, x_control=x_control)
-            p_values_list.append(p_values_t)
+            if _should_record_history(current_step, horizon, history_record_every):
+                p_values_list.append(p_values_t)
+            else:
+                algo.counts_evolution.pop()
+
+            for discovered_arm in algo.S_t:
+                discovery_times.setdefault(int(discovered_arm), current_step)
 
             if is_true_mean:
                 nb_found = len(algo.S_t.intersection(true_positives))
@@ -643,12 +661,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             else:
                 run_pr.append(len(algo.S_t))
 
-    return run_pr, p_values_list
+    return run_pr, p_values_list, discovery_times
 
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
-                   rho=0.01, cs_type='betting'):
+                   rho=0.01, cs_type='betting', return_discovery_times=False,
+                   history_record_every=1):
     """
     Runs the bandit experiment.
 
@@ -690,6 +709,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     """
     print(f"EXECUTION RUN EXP — cs_type={cs_type}")
     n_arms = len(arms)
+    history_record_every = max(1, int(history_record_every))
     if is_true_mean:
         if variable_mu_choice:
             true_positives = [i for i, m in enumerate(arms)
@@ -703,7 +723,12 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     counts_list = []
     p_values_list_by_sim = []
     list_positive = []
-    counts_evolution_sum = np.zeros((horizon + 1, n_arms))
+    discovery_times_list = []
+    n_history_points = 1 + sum(
+        1 for step in range(1, horizon + 1)
+        if _should_record_history(step, horizon, history_record_every)
+    )
+    counts_evolution_sum = np.zeros((n_history_points, n_arms))
 
     algo_factory = {
         'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
@@ -722,10 +747,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
         algo = algo_factory[mode]()
 
-        run_pr, p_values_list = _run_single_simulation(
+        run_pr, p_values_list, discovery_times = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice,
-            n_arms, is_true_mean, true_positives
+            n_arms, is_true_mean, true_positives, history_record_every
         )
 
         list_positive.append(algo.S_t)
@@ -737,6 +762,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         counts_list.append(counts_arr)
         counts_evolution_sum += counts_arr
         p_values_list_by_sim.append(p_values_list)
+        discovery_times_list.append(discovery_times)
 
     pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
     counts_history_mean = counts_evolution_sum / n_simulations
@@ -750,5 +776,8 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     np_p_values_mean = np.nanmean(padded_array, axis=0)
     np_p_values_list_by_sim = padded_array
 
-    return (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
-            np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    result = (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
+              np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    if return_discovery_times:
+        return (*result, discovery_times_list)
+    return result

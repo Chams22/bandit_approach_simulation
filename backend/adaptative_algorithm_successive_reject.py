@@ -301,19 +301,26 @@ class UniformAlgo:
 # =============================================================================
 # SIMULATION ENGINE  (mirror of adaptative_algorithm_v2.run_experiment)
 # =============================================================================
+def _should_record_history(step, horizon, history_record_every):
+    return step == horizon or step % history_record_every == 0
+
 
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                            control_arm, init_nb, init_choice, variable_mu_choice,
-                           n_arms, is_true_mean, true_positives):
+                           n_arms, is_true_mean, true_positives,
+                           history_record_every=1):
     p_values_list = []
     all_arm_counts = [0] * n_arms
     run_pr = []
+    history_record_every = max(1, int(history_record_every))
 
     if init_choice and init_nb > 0:
         data_init = [all_arm_data[no_sim][arm][:init_nb] for arm in range(n_arms)]
         algo.init_process(data_init)
         all_arm_counts = [init_nb] * n_arms
         algo.counts_evolution = [algo.counts.copy()]
+
+    discovery_times = {int(arm): 0 for arm in algo.S_t}
 
     for t in range(horizon):
         if variable_mu_choice:
@@ -324,7 +331,8 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             arm = algo.select_arm()
 
         if arm == "stop":
-            remaining = horizon - len(run_pr)
+            current_done = len(run_pr)
+            remaining = horizon - current_done
             if is_true_mean:
                 nb_found = len(algo.S_t.intersection(true_positives))
                 last_pr = nb_found / len(true_positives) if true_positives else 1.0
@@ -332,11 +340,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 last_pr = len(algo.S_t)
             run_pr.extend([last_pr] * remaining)
             last_counts = algo.counts_evolution[-1]
-            for _ in range(remaining):
-                algo.counts_evolution.append(last_counts.copy())
+            for step in range(current_done + 1, horizon + 1):
+                if _should_record_history(step, horizon, history_record_every):
+                    algo.counts_evolution.append(last_counts.copy())
             last_pv = p_values_list[-1] if p_values_list else [1.0] * n_arms
-            for _ in range(remaining):
-                p_values_list.append(list(last_pv))
+            for step in range(current_done + 1, horizon + 1):
+                if _should_record_history(step, horizon, history_record_every):
+                    p_values_list.append(list(last_pv))
             break
 
         len_arm = len(all_arm_data[no_sim][arm])
@@ -346,8 +356,15 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
 
         all_arm_counts[arm] += 1
+        current_step = len(run_pr) + 1
         p_values_t = algo.bh_update_optimized(arm, observation)
-        p_values_list.append(p_values_t)
+        if _should_record_history(current_step, horizon, history_record_every):
+            p_values_list.append(p_values_t)
+        else:
+            algo.counts_evolution.pop()
+
+        for discovered_arm in algo.S_t:
+            discovery_times.setdefault(int(discovered_arm), current_step)
 
         if is_true_mean:
             nb_found = len(algo.S_t.intersection(true_positives))
@@ -355,12 +372,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
         else:
             run_pr.append(len(algo.S_t))
 
-    return run_pr, p_values_list
+    return run_pr, p_values_list, discovery_times
 
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice,
-                   is_true_mean, rho=0.01, cs_type='nm_m2'):
+                   is_true_mean, rho=0.01, cs_type='nm_m2',
+                   return_discovery_times=False, history_record_every=1):
     """
     Run the experiment with the same public interface as adaptative_algorithm_v2.
 
@@ -370,6 +388,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     """
     print(f"EXECUTION SUCCESSIVE REJECT MODULE — cs_type={cs_type} | rho={rho}")
     n_arms = len(arms)
+    history_record_every = max(1, int(history_record_every))
 
     if is_true_mean:
         if variable_mu_choice:
@@ -381,7 +400,12 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         true_positives = None
 
     pnb_list, counts_list, p_values_list_by_sim, list_positive = [], [], [], []
-    counts_evolution_sum = np.zeros((horizon + 1, n_arms))
+    discovery_times_list = []
+    n_history_points = 1 + sum(
+        1 for step in range(1, horizon + 1)
+        if _should_record_history(step, horizon, history_record_every)
+    )
+    counts_evolution_sum = np.zeros((n_history_points, n_arms))
 
     algo_factory = {
         'adaptive': lambda: SuccessiveRejectsAlgo(
@@ -418,10 +442,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
     for no_sim in tqdm(range(n_simulations)):
         algo = algo_factory[mode]()
-        run_pr, p_values_list = _run_single_simulation(
+        run_pr, p_values_list, discovery_times = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice,
-            n_arms, is_true_mean, true_positives,
+            n_arms, is_true_mean, true_positives, history_record_every,
         )
         list_positive.append(algo.S_t)
         pnb_list.append(np.array(run_pr))
@@ -429,6 +453,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         counts_list.append(counts_arr)
         counts_evolution_sum += counts_arr
         p_values_list_by_sim.append(p_values_list)
+        discovery_times_list.append(discovery_times)
 
     pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
     counts_history_mean = counts_evolution_sum / n_simulations
@@ -441,5 +466,8 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     np_p_values_mean = np.nanmean(padded, axis=0)
     np_p_values_list_by_sim = padded
 
-    return (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
-            np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    result = (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
+              np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    if return_discovery_times:
+        return (*result, discovery_times_list)
+    return result

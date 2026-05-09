@@ -1,10 +1,10 @@
 List of the positive arm detected
 
    UNIF
-1. {2, 4, 7}
+1. {2, 4}
    UNIF VAR
 1. set()
    ADAPT
-1. {2, 4, 5, 7, 17}
+1. {1, 2, 4, 5, 14, 17}
    ADAPT VAR
-1. {11}
+1. set()
