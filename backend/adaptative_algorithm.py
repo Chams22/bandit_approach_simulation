@@ -560,7 +560,11 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             remaining_steps = horizon - len(run_pr)
             
             # 1. Rattrapage pour run_pr
-            last_pr = run_pr[-1] if run_pr else 0
+            if is_true_mean:
+                nb_found = len(algo.S_t.intersection(true_positives))
+                last_pr = nb_found / len(true_positives) if true_positives else 1.0
+            else:
+                last_pr = len(algo.S_t)
             run_pr.extend([last_pr] * remaining_steps)
 
             # 2. Rattrapage pour counts_evolution

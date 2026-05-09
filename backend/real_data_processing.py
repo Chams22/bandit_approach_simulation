@@ -15,7 +15,7 @@ import re
 #   "v2"     -> module V2 fusionné NM/NM_M2
 #   "v3"     -> continuous_v3 / binary_v3
 #   "all"    -> lance simple, v2 et v3 dans des dossiers séparés
-RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "v2").lower()
+RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "v3").lower()
 
 ALGORITHM_CONFIGS = {
     "simple": {

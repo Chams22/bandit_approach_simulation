@@ -143,6 +143,7 @@ def save_test_results(test_idx, cfg, result):
         'sigma': cfg['sigma'],
         'mu_0': cfg['mu_0'],
         'algo_name': cfg.get('algo_name', 'Simple (original)'),
+        'variable_mu_choice': cfg.get('variable_mu_choice', False),
         'batch': True,
     }
     payload = build_payload(cfg, result)
@@ -168,6 +169,7 @@ def build_payload(cfg, result):
         'n_arms': cfg['n_arms'],
         'n_sims': cfg['n_sims'],
         'algo_name': cfg.get('algo_name', 'Simple (original)'),
+        'variable_mu_choice': cfg.get('variable_mu_choice', False),
     }
 
 # =============================================================================
@@ -213,9 +215,11 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
     n_sims = cfg['n_sims']
     sigma = cfg['sigma']
     delta = cfg['delta']
+    mu_0 = cfg['mu_0']
     init_nb = cfg['init_nb']
     control_arm = cfg['control_arm']
     init_choice = cfg['init_choice']
+    variable_mu_choice = cfg.get('variable_mu_choice', False)
 
     safe_horizon = horizon + init_nb * n_arms + SAFE_HORIZON_MARGIN
     all_arm_data = prepare_experiment(true_means, safe_horizon, n_sims, sigma, dist_type)
@@ -224,16 +228,18 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
     (tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif,
      np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = \
         algo_module.run_experiment(
-            true_means, 0, delta, horizon + init_nb, 'uniform',
-            all_arm_data, n_sims, control_arm, 0, False, False, True,
+            true_means, mu_0, delta, horizon, 'uniform',
+            all_arm_data, n_sims, control_arm, init_nb, init_choice,
+            variable_mu_choice, True,
         )
 
     # Adaptive
     (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
      np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = \
         algo_module.run_experiment(
-            true_means, 0, delta, horizon, 'adaptive',
-            all_arm_data, n_sims, control_arm, init_nb, init_choice, False, True,
+            true_means, mu_0, delta, horizon, 'adaptive',
+            all_arm_data, n_sims, control_arm, init_nb, init_choice,
+            variable_mu_choice, True,
         )
 
     return {
@@ -414,7 +420,8 @@ def plot_spaghetti(counts_list_adapt, counts_adapt_mean, true_means, mu_0, n_sim
     return fig
 
 
-def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0):
+def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
+                    variable_mu_choice=False, control_arm=None):
     col1, col2, col3, col4 = st.columns(4)
 
     tpr_90_adapt = int(np.argmax(tpr_adapt >= 0.9)) if np.any(tpr_adapt >= 0.9) else len(tpr_adapt)
@@ -425,8 +432,13 @@ def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0):
     with col2:
         st.metric("Tps TPR 90% (Uniform)", f"{tpr_90_unif}")
 
-    good_arms = [i for i, m in enumerate(true_means) if m > mu_0]
-    bad_arms = [i for i, m in enumerate(true_means) if m <= mu_0]
+    if variable_mu_choice and control_arm is not None:
+        ref = true_means[int(control_arm)]
+        good_arms = [i for i, m in enumerate(true_means) if i != int(control_arm) and m > ref]
+        bad_arms = [i for i, m in enumerate(true_means) if i != int(control_arm) and m <= ref]
+    else:
+        good_arms = [i for i, m in enumerate(true_means) if m > mu_0]
+        bad_arms = [i for i, m in enumerate(true_means) if m <= mu_0]
 
     if good_arms and bad_arms:
         final_counts = counts_adapt_mean[-1]
@@ -440,10 +452,18 @@ def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0):
     with col4:
         st.metric("Gain d'efficacité", f"{gain:.1f}%")
 
-def compute_fdr_metrics(list_positive, true_means, mu_0):
+def compute_fdr_metrics(list_positive, true_means, mu_0,
+                        variable_mu_choice=False, control_arm=None):
     """FDR/TPR réels — uniquement en simulation car H1 connu."""
-    H1 = {int(i) for i in np.where(np.array(true_means) > mu_0)[0]}
-    H0 = set(range(len(true_means))) - H1
+    true_means = np.array(true_means)
+    if variable_mu_choice and control_arm is not None:
+        test_arms = {i for i in range(len(true_means)) if i != int(control_arm)}
+        ref = true_means[int(control_arm)]
+        H1 = {int(i) for i in test_arms if true_means[i] > ref}
+        H0 = test_arms - H1
+    else:
+        H1 = {int(i) for i in np.where(true_means > mu_0)[0]}
+        H0 = set(range(len(true_means))) - H1
 
     fdrs, tprs = [], []
     for St in list_positive:
@@ -473,6 +493,19 @@ def render_result_tabs(result, cfg, tab_prefix=""):
     sigma = cfg['sigma']
     horizon = cfg['horizon']
     n_sims = cfg['n_sims']
+    variable_mu_choice = cfg.get('variable_mu_choice', False)
+    control_arm = cfg.get('control_arm', None)
+    if variable_mu_choice and control_arm is not None:
+        reference_value = true_means[int(control_arm)]
+        hypothesis_label = f"> contrôle (bras {int(control_arm)})"
+        positive_flags = [
+            "Oui" if i != int(control_arm) and m > reference_value else "Non"
+            for i, m in enumerate(true_means)
+        ]
+    else:
+        reference_value = mu_0
+        hypothesis_label = "> μ₀"
+        positive_flags = ["Oui" if m > mu_0 else "Non" for m in true_means]
 
     tpr_adapt = result['tpr_adapt']
     tpr_unif = result['tpr_unif']
@@ -481,11 +514,27 @@ def render_result_tabs(result, cfg, tab_prefix=""):
     counts_list_adapt = result['counts_list_adapt']
     pvalues_adapt_mean = result['pvalues_adapt_mean']
     pvalues_unif_mean = result['pvalues_unif_mean']
-    m_adapt = compute_fdr_metrics(result['l_pos_adapt'], true_means, mu_0)
-    m_unif  = compute_fdr_metrics(result['l_pos_unif'],  true_means, mu_0)
+    m_adapt = compute_fdr_metrics(
+        result['l_pos_adapt'], true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
+    m_unif = compute_fdr_metrics(
+        result['l_pos_unif'], true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
 
 
-    display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0)
+    display_metrics(
+        tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
+    if variable_mu_choice:
+        st.caption(
+            f"Cadre statistique : contrôle online / var, référence = bras {int(control_arm)} "
+            f"(μ={reference_value:.3f})."
+        )
+    else:
+        st.caption(f"Cadre statistique : μ₀ fixe = {mu_0:.3f}.")
     st.markdown("---")
 
     tabs = st.tabs([
@@ -564,7 +613,7 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         final_data = {
             'Bras': [f"Bras {i}" for i in range(n_arms)],
             'Moyenne réelle': true_means,
-            '> μ₀': ['Oui' if m > mu_0 else 'Non' for m in true_means],
+            hypothesis_label: positive_flags,
             'Tirages (Adaptive)': counts_adapt_mean[-1].astype(int),
             'Tirages (Uniform)': counts_unif_mean[-1].astype(int),
             'TPR final (Adaptive)': [f"{tpr_adapt[-1]:.3f}"] * n_arms,
@@ -599,7 +648,10 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         st.subheader("Analyse des découvertes (FDR contrôlé)")
         for label, l_pos in [("Adaptive", result['l_pos_adapt']),
                           ("Uniform",  result['l_pos_unif'])]:
-            m = compute_fdr_metrics(l_pos, true_means, mu_0)
+            m = compute_fdr_metrics(
+                l_pos, true_means, mu_0,
+                variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+            )
             st.markdown(f"**{label}**")
             c1, c2, c3 = st.columns(3)
             c1.metric("FDR moyen", f"{m['FDR_mean']:.3f}")
@@ -685,10 +737,10 @@ with st.sidebar:
     default_mu_0 = 0.5 if dist_type == "Binomiale" else 0.0
     mu_0 = st.number_input("Seuil μ₀", value=default_mu_0, step=0.1)
 
-    init_nb = st.slider("Nombre initial de tirages par bras", 1, 100, 1, 1)
+    init_nb = st.slider("Nombre initial de tirages par bras", 0, 100, 10, 10)
     init_choice = st.checkbox(
         "Activer l'initialisation (init_choice)", value=True,
-        help="Si coché, l'algorithme Adaptive commence par tirer chaque bras init_nb fois.",
+        help="Si coché, Uniform et Adaptive commencent par tirer chaque bras init_nb fois.",
     )
 
     st.markdown("---")
@@ -698,6 +750,14 @@ with st.sidebar:
     control_arm = st.number_input(
         "Indice du bras de contrôle", min_value=0, max_value=int(n_arms) - 1,
         value=0, step=1,
+    )
+    variable_mu_choice = st.checkbox(
+        "Mode contrôle online / var",
+        value=False,
+        help=(
+            "Si coché, Uniform et Adaptive apprennent le bras contrôle pendant "
+            "l'expérience et testent les traitements contre ce contrôle."
+        ),
     )
 
     st.caption("Moyennes des bras")
@@ -737,6 +797,7 @@ def current_cfg():
         "true_means": np.array(true_means),
         "dist_type": dist_type,
         "algo_name": algo_choice,   # ← nom de l'algo sélectionné
+        "variable_mu_choice": variable_mu_choice,
     }
 
 # =============================================================================
@@ -783,6 +844,7 @@ if st.session_state.single_result is not None:
                 'horizon': cfg['horizon'], 'n_sims': cfg['n_sims'],
                 'sigma': cfg['sigma'], 'mu_0': cfg['mu_0'],
                 'algo_name': cfg.get('algo_name', 'Simple (original)'),
+                'variable_mu_choice': cfg.get('variable_mu_choice', False),
                 'batch': False,
             }
             payload = build_payload(cfg, st.session_state.single_result)
@@ -804,6 +866,7 @@ if st.session_state.test_configs:
             st.write(f"**Moyennes:** {cfg['true_means']}")
             st.write(f"**μ₀:** {cfg['mu_0']}, **Init pulls:** {cfg['init_nb']}, **Init choice:** {cfg['init_choice']}")
             st.write(f"**Bras contrôle:** {cfg['control_arm']}")
+            st.write(f"**Mode var:** {cfg.get('variable_mu_choice', False)}")
 
     col_a, col_b = st.columns(2)
     with col_a:

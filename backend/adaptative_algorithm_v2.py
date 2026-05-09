@@ -205,14 +205,15 @@ class JamiesonJainAlgo:
 
         best_ucb = -float('inf')
         selected = candidates[0]
+        ucb_delta = self.delta / max(self.n, 1)
 
         for i in candidates:
             if self.control_arm_idx is not None:
                 ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
-                      + self.phi(self.counts[i], self.delta, self.emp_vars[i]) \
-                      + self.phi(self.counts[self.control_arm_idx], self.delta, self.emp_vars[self.control_arm_idx])
+                      + self.phi(self.counts[i], ucb_delta, self.emp_vars[i]) \
+                      + self.phi(self.counts[self.control_arm_idx], ucb_delta, self.emp_vars[self.control_arm_idx])
             else:
-                ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, self.emp_vars[i])
+                ucb = self.emp_means[i] + self.phi(self.counts[i], ucb_delta, self.emp_vars[i])
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -378,8 +379,7 @@ class UniformAlgo:
 
     def select_arm(self):
         if self.control_arm_idx is not None:
-            candidates = [i for i in range(self.n)
-                          if i not in self.S_t and i != self.control_arm_idx]
+            candidates = [i for i in range(self.n) if i != self.control_arm_idx]
             if not candidates:
                 return "stop"
             return np.random.choice(candidates)
@@ -477,7 +477,11 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             print("stop triggered")
             remaining_steps = horizon - len(run_pr)
 
-            last_pr = run_pr[-1] if run_pr else 0
+            if is_true_mean:
+                nb_found = len(algo.S_t.intersection(true_positives))
+                last_pr = nb_found / len(true_positives) if true_positives else 1.0
+            else:
+                last_pr = len(algo.S_t)
             run_pr.extend([last_pr] * remaining_steps)
 
             last_counts = algo.counts_evolution[-1]
