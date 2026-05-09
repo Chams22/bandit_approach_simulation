@@ -904,7 +904,7 @@ if st.session_state.test_results:
 st.markdown("---")
 with st.expander("🗄️ Historique local des simulations"):
     if os.path.exists(CATALOG_FILE):
-        catalog = pd.read_csv(CATALOG_FILE)
+        catalog = pd.read_csv(CATALOG_FILE, on_bad_lines='skip')
         if len(catalog) == 0:
             st.info("Catalogue vide.")
         else:
