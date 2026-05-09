@@ -247,6 +247,8 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
         'counts_list_unif': counts_list_unif,
         'pvalues_adapt_mean': pvalues_adapt_mean,
         'pvalues_unif_mean': pvalues_unif_mean,
+        'l_pos_adapt': l_pos_adapt,
+        'l_pos_unif':  l_pos_unif,
     }
 
 # =============================================================================
@@ -434,6 +436,25 @@ def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0):
     with col4:
         st.metric("Gain d'efficacité", f"{gain:.1f}%")
 
+def compute_fdr_metrics(list_positive, true_means, mu_0):
+    """FDR/TPR réels — uniquement en simulation car H1 connu."""
+    H1 = {int(i) for i in np.where(np.array(true_means) > mu_0)[0]}
+    H0 = set(range(len(true_means))) - H1
+
+    fdrs, tprs = [], []
+    for St in list_positive:
+        tp = len(St & H1)
+        fp = len(St & H0)
+        fdrs.append(fp / max(len(St), 1))
+        tprs.append(tp / max(len(H1), 1))
+
+    return {
+        "FDR_mean": np.mean(fdrs),
+        "TPR_mean": np.mean(tprs),
+        "H1": H1,
+        "H0": H0,
+        "last_St": list_positive[-1] if list_positive else set(),
+    }
 
 def render_result_tabs(result, cfg, tab_prefix=""):
     """Affiche tous les onglets de résultat pour un test donné.
@@ -468,6 +489,7 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         "Données brutes",
         "P-Values (combiné)",
         "P-Values (grille)",
+        "FDR — Découvertes",
     ])
 
     with tabs[0]:
@@ -561,7 +583,35 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         st.pyplot(fig)
         plt.close(fig)
         st.info("Chaque ligne correspond à un bras. Les couleurs sont identiques entre Uniform et Adaptive.")
+    
+    with tabs[7]:
+        st.subheader("Analyse des découvertes (FDR contrôlé)")
+        for label, l_pos in [("Adaptive", result['l_pos_adapt']),
+                          ("Uniform",  result['l_pos_unif'])]:
+            m = compute_fdr_metrics(l_pos, true_means, mu_0)
+            st.markdown(f"**{label}**")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("FDR moyen", f"{m['FDR_mean']:.3f}")
+            c2.metric("TPR moyen", f"{m['TPR_mean']:.3f}")
+            c3.metric("Vrais positifs H1", str(sorted(m['H1'])))
+            st.write(f"Dernière simulation — S_t : `{m['last_St']}`")
 
+            # --- Interprétation ---
+            n_H1 = len(m['H1'])
+            fdr_pct = m['FDR_mean'] * 100
+            tpr_pct = m['TPR_mean'] * 100
+            missed = n_H1 - round(m['TPR_mean'] * n_H1)
+
+            fdr_ok = m['FDR_mean'] <= delta
+            st.info(
+                f"Sur {n_sims} simulations, l'algorithme **{label}** a identifié en moyenne "
+                f"**{tpr_pct:.1f}%** des {n_H1} vrais bras positifs (H1 = {sorted(m['H1'])}), "
+                f"soit environ **{missed} bras manqué(s)** en moyenne. "
+                f"Le taux de fausses découvertes moyen est de **{fdr_pct:.1f}%**, "
+                f"{'ce qui respecte' if fdr_ok else '⚠️ ce qui dépasse'} le seuil fixé δ = {delta:.2f}. "
+                f"{' Le contrôle FDR est garanti.' if fdr_ok else '❌ Le contrôle FDR est violé.'}"
+            )
+            st.markdown("---")
 # =============================================================================
 # PART 4: INITIALISATION DU SESSION STATE
 # =============================================================================
@@ -691,7 +741,7 @@ if run_button:
     if import_err:
         st.warning(f"⚠️ Module '{cfg['algo_name']}' introuvable — fallback sur Standard.\n\n`{import_err}`")
     else:
-        st.caption(f"🧠 Algorithme chargé : **{cfg['algo_name']}**")
+        st.caption(f"Algorithme chargé : **{cfg['algo_name']}**")
     with st.spinner("Simulation en cours..."):
         result = run_single_experiment(cfg, dist_type, algo_module)
     st.session_state.single_result = result
