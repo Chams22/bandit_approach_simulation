@@ -4,10 +4,9 @@ from tqdm import tqdm
 # -----------------------------------------------------------------------------
 # Adapted for Continuous (Gaussian) Data — V3
 # -----------------------------------------------------------------------------
-# Three confidence sequence options via cs_type parameter:
-#   'normal_mixture'  — Original V_hat (sum of squared prediction errors), rigorous
-#   'nm_m2'           — Uses M2 (Welford), tighter in practice, slight theoretical looseness
+# V3 BH supports betting only:
 #   'betting'         — Sub-Gaussian GROW (no rho needed, asymptotically optimal)
+# NM/NM_M2 BH is intentionally reserved for V2.
 #
 # V3 change vs V2: two-sample betting uses a rigorous paired e-process.
 #   Instead of betting on (X_arm - mu_hat_control), we bet on the direct
@@ -33,13 +32,14 @@ class JamiesonJainAlgo:
             Ignored when cs_type='betting'. Default: 0.01.
         cs_type : str
             Confidence sequence type:
-            - 'normal_mixture': Original V_hat NM (Howard et al., 2021). Rigorous.
-            - 'nm_m2': NM with M2 instead of V_hat. Tighter on continuous data.
             - 'betting': Sub-Gaussian GROW martingale. No rho, asymptotically optimal.
         control_arm_idx : int or None
             If set, enables two-sample CS mode: tests mu_arm - mu_control > 0
             instead of mu_arm > mu_0. Default: None (single-sample mode).
         """
+        if cs_type != 'betting':
+            raise ValueError("V3 uses betting BH only. Use V2 for NM/NM_M2 BH.")
+
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
@@ -325,36 +325,16 @@ class JamiesonJainAlgo:
         current_St = set()
 
         if self.control_arm_idx is not None:
-            if self.cs_type == 'betting':
-                # Two-sample betting: p-values from paired martingale
-                p_values_with_idx = [(self.get_anytime_pvalue(i), i)
-                                     for i in range(self.n) if i != self.control_arm_idx]
-                p_values_with_idx.sort(key=lambda x: x[0])
-                n_tested = self.n - 1
-                for k in range(n_tested, 0, -1):
-                    if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
-                        for rank in range(k):
-                            current_St.add(p_values_with_idx[rank][1])
-                        break
-            else:
-                # Two-sample NM LCB
-                # Budget split by 2 for union bound: each phi uses alpha/2
-                # so P(CI_arm fails OR CI_ctrl fails) <= alpha/2 + alpha/2 = alpha
-                # Denominator n-1: we test n-1 hypotheses (control excluded)
-                n_tested = self.n - 1
-                for k in range(n_tested, 0, -1):
-                    effective_delta = self.delta * k / n_tested
-                    phi_ctrl = self.phi(self.counts[self.control_arm_idx], effective_delta / 2, self.emp_vars[self.control_arm_idx])
-                    passing_arms = [
-                        i for i in range(self.n)
-                        if i != self.control_arm_idx
-                        and (self.emp_means[i] - self.emp_means[self.control_arm_idx])
-                            - self.phi(self.counts[i], effective_delta / 2, self.emp_vars[i])
-                            - phi_ctrl >= 0
-                    ]
-                    if len(passing_arms) >= k:
-                        current_St = set(passing_arms)
-                        break
+            # Two-sample betting: p-values from paired martingale
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i)
+                                 for i in range(self.n) if i != self.control_arm_idx]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            n_tested = self.n - 1
+            for k in range(n_tested, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                    for rank in range(k):
+                        current_St.add(p_values_with_idx[rank][1])
+                    break
         else:
             # Single-sample: p-values sorted BH
             p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
@@ -380,6 +360,9 @@ class UniformAlgo:
         two-sample support as JamiesonJainAlgo. select_arm draws uniformly
         among test arms (control excluded in two-sample mode).
         """
+        if cs_type != 'betting':
+            raise ValueError("V3 uses betting BH only. Use V2 for NM/NM_M2 BH.")
+
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
@@ -543,31 +526,15 @@ class UniformAlgo:
         current_St = set()
 
         if self.control_arm_idx is not None:
-            if self.cs_type == 'betting':
-                p_values_with_idx = [(self.get_anytime_pvalue(i), i)
-                                     for i in range(self.n) if i != self.control_arm_idx]
-                p_values_with_idx.sort(key=lambda x: x[0])
-                n_tested = self.n - 1
-                for k in range(n_tested, 0, -1):
-                    if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
-                        for rank in range(k):
-                            current_St.add(p_values_with_idx[rank][1])
-                        break
-            else:
-                n_tested = self.n - 1
-                for k in range(n_tested, 0, -1):
-                    effective_delta = self.delta * k / n_tested
-                    phi_ctrl = self.phi(self.counts[self.control_arm_idx], effective_delta / 2, self.emp_vars[self.control_arm_idx])
-                    passing_arms = [
-                        i for i in range(self.n)
-                        if i != self.control_arm_idx
-                        and (self.emp_means[i] - self.emp_means[self.control_arm_idx])
-                            - self.phi(self.counts[i], effective_delta / 2, self.emp_vars[i])
-                            - phi_ctrl >= 0
-                    ]
-                    if len(passing_arms) >= k:
-                        current_St = set(passing_arms)
-                        break
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i)
+                                 for i in range(self.n) if i != self.control_arm_idx]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            n_tested = self.n - 1
+            for k in range(n_tested, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                    for rank in range(k):
+                        current_St.add(p_values_with_idx[rank][1])
+                    break
         else:
             p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
             p_values = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
@@ -709,7 +676,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     rho : float
         NM tuning parameter (ignored for betting). Default: 0.01.
     cs_type : str
-        'normal_mixture', 'nm_m2', or 'betting'. Default: 'nm_m2'.
+        'betting' only. Default: 'betting'.
 
     Returns
     -------
@@ -743,7 +710,8 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     if mode not in algo_factory:
         raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
 
-    print(f"Simulation Mode: {mode.upper()} | CS: {cs_type} | rho={rho} ({n_simulations} runs)")
+    mode_label = f"{mode.upper()} VAR" if variable_mu_choice else mode.upper()
+    print(f"Simulation Mode: {mode_label} | CS: {cs_type} | rho={rho} ({n_simulations} runs)")
 
     for no_sim in tqdm(range(n_simulations)):
 
