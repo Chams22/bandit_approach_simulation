@@ -1,0 +1,10 @@
+List of the positive arm detected
+
+   UNIF
+1. set()
+   UNIF VAR
+1. set()
+   ADAPT
+1. {17, 5, 14}
+   ADAPT VAR
+1. {2, 4, 5, 7, 17}

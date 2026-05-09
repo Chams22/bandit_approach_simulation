@@ -2,13 +2,64 @@ import pandas as pd
 import numpy as np
 import os
 import importlib
-import usable_adaptative_algorithm_fusion_binary_v3 as usable_adaptative_algorithm_fusion_binary
-importlib.reload(usable_adaptative_algorithm_fusion_binary)
-import usable_adaptative_algorithm_fusion_continuous_v3 as usable_adaptative_algorithm_fusion_continuous
-importlib.reload(usable_adaptative_algorithm_fusion_continuous)
+import subprocess
+import sys
+
 import matplotlib.pyplot as plt
 from statistics import mean, variance
 import re
+
+
+# Choix facile de l'implémentation à lancer:
+#   "simple" -> usable_adaptative_algorithm.py
+#   "v2"     -> module V2 fusionné NM/NM_M2
+#   "v3"     -> continuous_v3 / binary_v3
+#   "all"    -> lance simple, v2 et v3 dans des dossiers séparés
+RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "v2").lower()
+
+ALGORITHM_CONFIGS = {
+    "simple": {
+        "continuous_module": "usable_adaptative_algorithm",
+        "binary_module": "usable_adaptative_algorithm",
+        "output_dir": "figure_real_data_simple",
+    },
+    "v2": {
+        "continuous_module": "usable_adaptative_algorithm_v2",
+        "binary_module": "usable_adaptative_algorithm_v2",
+        "output_dir": "figure_real_data_v2",
+    },
+    "v3": {
+        "continuous_module": "usable_adaptative_algorithm_continuous_v3",
+        "binary_module": "usable_adaptative_algorithm_binary_v3",
+        "output_dir": "figure_real_data_v3",
+    },
+}
+
+if __name__ == "__main__" and RUN_ALGO == "all":
+    script_path = os.path.abspath(__file__)
+    for algo_key in ALGORITHM_CONFIGS:
+        print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
+        env = os.environ.copy()
+        env["REAL_DATA_ALGO"] = algo_key
+        subprocess.run([sys.executable, script_path], cwd=os.path.dirname(script_path),
+                       env=env, check=True)
+    sys.exit(0)
+
+if RUN_ALGO not in ALGORITHM_CONFIGS:
+    valid = ", ".join([*ALGORITHM_CONFIGS.keys(), "all"])
+    raise ValueError(f"Unknown RUN_ALGO={RUN_ALGO!r}. Choose one of: {valid}")
+
+ACTIVE_ALGO_CONFIG = ALGORITHM_CONFIGS[RUN_ALGO]
+if ACTIVE_ALGO_CONFIG["binary_module"] == ACTIVE_ALGO_CONFIG["continuous_module"]:
+    usable_module = importlib.import_module(ACTIVE_ALGO_CONFIG["binary_module"])
+    usable_module = importlib.reload(usable_module)
+    adaptative_algorithm_binary = usable_module
+    adaptative_algorithm_continuous = usable_module
+else:
+    adaptative_algorithm_binary = importlib.import_module(ACTIVE_ALGO_CONFIG["binary_module"])
+    importlib.reload(adaptative_algorithm_binary)
+    adaptative_algorithm_continuous = importlib.import_module(ACTIVE_ALGO_CONFIG["continuous_module"])
+    importlib.reload(adaptative_algorithm_continuous)
 
 
 
@@ -117,6 +168,11 @@ if __name__ == "__main__":
         raise RuntimeError("Git root not found (no .git in parents)")
 
     git_root = find_git_root()
+    output_root = git_root / ACTIVE_ALGO_CONFIG["output_dir"]
+    print(f"\n=== Active usable algorithm: {RUN_ALGO.upper()} ===")
+    print(f"Continuous module: {ACTIVE_ALGO_CONFIG['continuous_module']}")
+    print(f"Binary module: {ACTIVE_ALGO_CONFIG['binary_module']}")
+    print(f"Output directory: {output_root}\n")
     plt.close('all')
     
     # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
@@ -175,6 +231,8 @@ if __name__ == "__main__":
     num_graph=0
     for name_data in list_name:
         print("***********************name of the database treated:", name_data.upper(), "***********************")
+        dataset_output_dir = output_root / name_data
+        dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
         data_test=results[name_data]['data']
         arm_test=results[name_data]['arm_names']
@@ -204,7 +262,7 @@ if __name__ == "__main__":
         
         sort_mean_desc = sorted(list_stat, key=lambda x: x[2], reverse=True)
         sort_var_desc = sorted(list_stat, key=lambda x: x[3], reverse=True)
-        with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "w", encoding="utf-8") as f:
+        with open(dataset_output_dir / "classic_stats.txt", "w", encoding="utf-8") as f:
             f.write("List of the statistics\n\n")
             for n in range(n_arms):
                 f.write(f"arm nb {n} : '{list_stat[n][1]}'\n mean = {list_stat[n][2]}\n var = {list_stat[n][3]} \n n = {list_stat[n][4]} \n")
@@ -332,7 +390,7 @@ if __name__ == "__main__":
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
-            plt.savefig(git_root / f"figure_real_data/{name_data}/figure0.png", dpi=300, bbox_inches="tight")
+            plt.savefig(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
             plt.close()
         elif type_de_loi == "bernouilli":
             # ==========================================
@@ -463,33 +521,38 @@ if __name__ == "__main__":
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
-            plt.savefig(git_root / f"figure_real_data/{name_data}/figure0.png", dpi=300, bbox_inches="tight")
+            plt.savefig(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
             plt.close()
         else:
             print("Erreur : La variable 'type_de_loi' doit être strictement égale à 'normal' ou 'bernouilli'.")            
 
-        with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "r", encoding="utf-8") as f:
+        with open(dataset_output_dir / "classic_stats.txt", "r", encoding="utf-8") as f:
             contenu_existant = f.read()
-        with open(git_root / f"figure_real_data/{name_data}/classic_stats.txt", "w", encoding="utf-8") as f:
+        with open(dataset_output_dir / "classic_stats.txt", "w", encoding="utf-8") as f:
             f.write(str(liste_vrai_positif) + contenu_existant)
 
         
         is_true_mean=False
         # 1. Run Simulations
         if type_de_loi=="normal":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm_fusion_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm_fusion_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm_fusion_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
         elif type_de_loi=="bernouilli":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = usable_adaptative_algorithm_fusion_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = usable_adaptative_algorithm_fusion_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = usable_adaptative_algorithm_fusion_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
+            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean)
+            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean)
         
 
-        with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "w", encoding="utf-8") as f:
+        with open(dataset_output_dir / "resultats.txt", "w", encoding="utf-8") as f:
             f.write("List of the positive arm detected\n\n")
             f.write("   UNIF\n")
             for i, element in enumerate(l_pos_unif, 1):
+                f.write(f"{i}. {element}\n")
+            f.write("   UNIF VAR\n")
+            for i, element in enumerate(l_pos_unif_v, 1):
                 f.write(f"{i}. {element}\n")
             f.write("   ADAPT\n")
             for i, element in enumerate(l_pos_adapt, 1):
@@ -499,16 +562,17 @@ if __name__ == "__main__":
                 f.write(f"{i}. {element}\n")
 
         print("pos unif:", l_pos_unif)
+        print("pos unif v:", l_pos_unif_v)
         print("pos adapt:", l_pos_adapt)
         print("pos adapt v:", l_pos_adapt_v)
 
         
 
-        with open(git_root / f"figure_real_data/{name_data}/resultats.txt", "r", encoding="utf-8") as f:
+        with open(dataset_output_dir / "resultats.txt", "r", encoding="utf-8") as f:
             contenu = f.read()
 
         # Regex : capture le nom de la méthode et le contenu entre {}
-        pattern = r'(UNIF|ADAPT VAR|ADAPT)\s+\d+\.\s+\{([^}]+)\}'
+        pattern = r'(UNIF VAR|ADAPT VAR|UNIF|ADAPT)\s+\d+\.\s+\{([^}]*)\}'
         matches = re.findall(pattern, contenu)
         print(matches)
 
@@ -516,9 +580,10 @@ if __name__ == "__main__":
         print(matches)
         if matches:
             for nom, nombres in matches:
-                resultats[nom] = set(int(x.strip()) for x in nombres.split(','))
+                resultats[nom] = set(int(x.strip()) for x in nombres.split(',') if x.strip())
 
         liste_unif = resultats.get('UNIF', set())
+        liste_unif_var = resultats.get('UNIF VAR', set())
         liste_adapt = resultats.get('ADAPT', set())
         liste_adapt_var = resultats.get('ADAPT VAR', set())
 
@@ -584,23 +649,27 @@ if __name__ == "__main__":
 
             fig.suptitle(f"Détection des bras significatifs : {name_data}", fontsize=14, fontweight='bold')
             plt.tight_layout()
-            plt.savefig(git_root / f"figure_real_data/{name_data}/figure6.png", dpi=300, bbox_inches="tight")
+            plt.savefig(dataset_output_dir / "figure6.png", dpi=300, bbox_inches="tight")
             plt.close()
 
         # Appel
-        detectes_list = [(liste_unif, "unif"), (liste_adapt, "adapt"), (liste_adapt_var, "adapt var")]
+        detectes_list = [(liste_unif, "unif"), (liste_unif_var, "unif var"),
+                         (liste_adapt, "adapt"), (liste_adapt_var, "adapt var")]
         plot_detection_comparison(liste_vrai_positif, detectes_list, range(len(arm_test)), arm_test_clean, name_data)
 
         # --- PLOT 1: pr ---
         plt.figure(1+num_graph*10, figsize=(10, 5))
-        plt.plot(pnb_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-        plt.plot(pnb_adapt_v, label='Adaptive_Var', color="#59e244", linewidth=2)    
-        plt.plot(pnb_unif, label='Uniform', color='#1f77b4', linestyle='--')
+        classic_color = '#ff7f0e'
+        var_color = '#1f77b4'
+        plt.plot(pnb_adapt, label='Adaptive', color=classic_color, linewidth=2)
+        plt.plot(pnb_unif, label='Uniform', color=classic_color, linestyle='--')
+        plt.plot(pnb_adapt_v, label='Adaptive_Var', color=var_color, linewidth=2)
+        plt.plot(pnb_unif_v, label='Uniform_Var', color=var_color, linestyle='--')
         plt.axhline(y=1.0, color='gray', linestyle=':')
         plt.title("Discovery speed (pr)")
         plt.legend()
         plt.grid(True, alpha=0.3)
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure1.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure1.png", dpi=300, bbox_inches="tight")
         plt.close()
 
 
@@ -608,7 +677,7 @@ if __name__ == "__main__":
         import numpy as np
         import matplotlib.pyplot as plt
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
         # Trouver les index des bras les plus tirés à la fin dans l'algo adaptatif
         final_pulls = counts_adapt_mean[-1, :]
@@ -618,7 +687,14 @@ if __name__ == "__main__":
         # On crée une palette de couleurs distinctes pour les top bras
         colors = plt.cm.tab10.colors 
 
-        for subplot_idx, data_mean in enumerate([counts_unif_mean, counts_adapt_mean, counts_adapt_v_mean]):
+        pull_datasets = [
+            ("Uniform: Number of pulls", counts_unif_mean),
+            ("Uniform VAR: Number of pulls", counts_unif_v_mean),
+            ("Adaptive: Number of pulls", counts_adapt_mean),
+            ("Adaptive VAR: Number of pulls", counts_adapt_v_mean),
+        ]
+
+        for subplot_idx, (title, data_mean) in enumerate(pull_datasets):
             ax = axes[subplot_idx]
             color_counter = 0
             
@@ -646,18 +722,16 @@ if __name__ == "__main__":
             
             ax.set_xlabel("Time (t)")
             ax.grid(True, alpha=0.3)
+            ax.set_title(title)
 
-        axes[0].set_title("Uniform: Number of pulls")
         axes[0].set_ylabel("Number of pulls ($T_i(t)$)")
-        axes[1].set_title("Adaptive: Number of pulls")
-        axes[2].set_title("Adaptive VAR: Number of pulls")
 
         # Une petite légende propre avec uniquement les bras importants
-        handles, labels = axes[2].get_legend_handles_labels()
+        handles, labels = axes[-1].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.0), ncol=6)
 
         plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure2_clean.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure2_clean.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
@@ -706,7 +780,50 @@ if __name__ == "__main__":
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
         plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure3.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # --- PLOT 3 UNIF VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
+        plt.figure(7+num_graph*10, figsize=(14, 7))
+        plt.title(f"Uniform VAR: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
+
+        final_pulls_unif_v = counts_unif_v_mean[-1, :]
+        top_arms_idx_unif_v = np.argsort(final_pulls_unif_v)[-5:]
+        colors = plt.cm.tab10.colors
+        color_counter = 0
+
+        for arm_idx in range(n_arms):
+            is_control = (arm_test[arm_idx] == 'control')
+            is_top = (arm_idx in top_arms_idx_unif_v)
+
+            if is_top or is_control:
+                base_color = 'black' if is_control else colors[color_counter % len(colors)]
+                linestyle = '--' if is_control else '-'
+                mean_linewidth = 2.5
+                sim_alpha = 0.15
+                label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
+                if not is_control:
+                    color_counter += 1
+            else:
+                base_color = 'gray'
+                linestyle = '-'
+                mean_linewidth = 1.0
+                sim_alpha = 0.02
+                label = "_nolegend_"
+
+            for sim_counts in counts_unif_v_list:
+                plt.plot(sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha,
+                         linewidth=0.5, linestyle=linestyle)
+
+            plt.plot(counts_unif_v_mean[:, arm_idx], label=label, color=base_color,
+                     linewidth=mean_linewidth, linestyle=linestyle)
+
+        plt.xlabel("Time (t)", fontsize=12)
+        plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
+        plt.tight_layout()
+        plt.savefig(dataset_output_dir / "figure3unifvar.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
@@ -757,15 +874,16 @@ if __name__ == "__main__":
 
         print("Displaying Adaptive VAR plots...")
         plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure3var.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure3var.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 4: P-VALUES ---
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, axes = plt.subplots(1, 4, figsize=(24, 6))
         fig.suptitle("Evolution of P-values by iteration and arm", fontsize=16)
 
         datasets = [
             ("Uniform", np_p_value_mean_unif),
+            ("Uniform VAR", np_p_value_mean_unif_v),
             ("Adaptive", np_p_value_mean_adapt),
             ("Adaptive VAR", np_p_value_mean_adapt_v)
         ]
@@ -818,7 +936,7 @@ if __name__ == "__main__":
             ax.grid(True, which="both", ls="-", alpha=0.2) # Grille adaptée au log
 
         # Légende unique en bas
-        handles, labels = axes[1].get_legend_handles_labels()
+        handles, labels = axes[2].get_legend_handles_labels()
         # On utilise un dict pour enlever les doublons potentiels (comme le seuil)
         by_label = dict(zip(labels, handles))
         fig.legend(by_label.values(), by_label.keys(), loc='lower center', 
@@ -827,13 +945,14 @@ if __name__ == "__main__":
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25) # Place pour la légende
 
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure4.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure4.png", dpi=300, bbox_inches="tight")
         plt.close()
 
     # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
 
         # Définition explicite des couleurs pour chaque algorithme
         color_unif = 'tab:blue'
+        color_unif_v = 'tab:purple'
         color_adapt = 'tab:orange'
         color_adapt_v = 'tab:green'
 
@@ -856,6 +975,7 @@ if __name__ == "__main__":
 
             # Tracé des 3 trajectoires sur le MÊME graphique
             ax.plot(np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
+            ax.plot(np_p_value_mean_unif_v[:, arm_idx], label="Uniform VAR", linewidth=2, color=color_unif_v)
             ax.plot(np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
             ax.plot(np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
             
@@ -867,7 +987,7 @@ if __name__ == "__main__":
         axes[-1].set_xlabel("Time (t)")
 
         plt.tight_layout()
-        plt.savefig(git_root / f"figure_real_data/{name_data}/figure5.png", dpi=300, bbox_inches="tight")
+        plt.savefig(dataset_output_dir / "figure5.png", dpi=300, bbox_inches="tight")
         # plt.show()
         num_graph+=1
         plt.close()

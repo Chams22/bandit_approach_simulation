@@ -35,25 +35,39 @@ parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from backend import usable_adaptative_algorithm  # module de base (toujours chargé)
+from backend import adaptative_algorithm  # module de base (toujours chargé)
 
 # Recharge uniquement en dev (mettre DEV_MODE=1 dans l'env pour activer)
 if os.environ.get("DEV_MODE") == "1":
-    importlib.reload(usable_adaptative_algorithm)
+    importlib.reload(adaptative_algorithm)
 
 # --- Mapping des algorithmes disponibles --------------------------------------
 ALGO_OPTIONS = {
-    "Standard (original)": "usable_adaptative_algorithm",
-    "Fusion v2 — Continue": "usable_adaptative_algorithm_fusion_continuous_v2",
-    "Fusion v2 — Binaire":  "usable_adaptative_algorithm_fusion_binary_v2",
-    "Fusion v3 — Continue": "usable_adaptative_algorithm_fusion_continuous_v3",
-    "Fusion v3 — Binaire":  "usable_adaptative_algorithm_fusion_binary_v3",
+    "Simple (original)": "adaptative_algorithm",
+    "Fusion V2 - NM/NM_M2": "adaptative_algorithm_v2",
+    "Fusion V3 - Continue betting": "adaptative_algorithm_continuous_v3",
+    "Fusion V3 - Binaire betting": "adaptative_algorithm_binary_v3",
+}
+
+LEGACY_ALGO_NAMES = {
+    "Simple (original usable)": "Simple (original)",
+    "Standard (original)": "Simple (original)",
+    "usable_adaptative_algorithm": "Simple (original)",
+    "Fusion V2 — NM/NM_M2": "Fusion V2 - NM/NM_M2",
+    "usable_adaptative_algorithm_fusion_v2": "Fusion V2 - NM/NM_M2",
+    "Fusion V3 — Continue betting": "Fusion V3 - Continue betting",
+    "usable_adaptative_algorithm_fusion_continuous_v3": "Fusion V3 - Continue betting",
+    "Fusion V3 — Binaire betting": "Fusion V3 - Binaire betting",
+    "usable_adaptative_algorithm_fusion_binary_v3": "Fusion V3 - Binaire betting",
 }
 
 
 def load_algo_module(algo_name: str):
     """Importe dynamiquement le module backend choisi."""
-    module_name = ALGO_OPTIONS[algo_name]
+    normalized_name = LEGACY_ALGO_NAMES.get(algo_name, algo_name)
+    if normalized_name not in ALGO_OPTIONS:
+        return adaptative_algorithm, f"Algorithme inconnu: {algo_name}"
+    module_name = ALGO_OPTIONS[normalized_name]
     full_name = f"backend.{module_name}"
     try:
         mod = importlib.import_module(full_name)
@@ -61,7 +75,15 @@ def load_algo_module(algo_name: str):
             importlib.reload(mod)
         return mod, None
     except ImportError as e:
-        return usable_adaptative_algorithm, str(e)  # fallback sur le standard
+        return adaptative_algorithm, str(e)  # fallback sur le standard
+
+
+def validate_algo_distribution(algo_name: str, dist_type: str):
+    if "V3" in algo_name and "Continue" in algo_name and dist_type != "Normale":
+        return "V3 Continue betting est prévu pour les récompenses normales/continues."
+    if "V3" in algo_name and "Binaire" in algo_name and dist_type != "Binomiale":
+        return "V3 Binaire betting est prévu pour les récompenses Bernoulli/binaires."
+    return None
 
 # --- Configuration de la page --------------------------------------------------
 st.set_page_config(
@@ -120,6 +142,7 @@ def save_test_results(test_idx, cfg, result):
         'n_sims': cfg['n_sims'],
         'sigma': cfg['sigma'],
         'mu_0': cfg['mu_0'],
+        'algo_name': cfg.get('algo_name', 'Simple (original)'),
         'batch': True,
     }
     payload = build_payload(cfg, result)
@@ -144,6 +167,7 @@ def build_payload(cfg, result):
         'horizon': cfg['horizon'],
         'n_arms': cfg['n_arms'],
         'n_sims': cfg['n_sims'],
+        'algo_name': cfg.get('algo_name', 'Simple (original)'),
     }
 
 # =============================================================================
@@ -182,7 +206,7 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
     """Exécute uniform + adaptive pour une config donnée. Retourne un dict
     avec tout ce qu'il faut pour l'affichage et la sauvegarde."""
     if algo_module is None:
-        algo_module = usable_adaptative_algorithm
+        algo_module = adaptative_algorithm
     true_means = cfg['true_means']
     n_arms = cfg['n_arms']
     horizon = cfg['horizon']
@@ -284,7 +308,7 @@ def plot_confidence_intervals_schematic(true_means, final_counts, mu_0, delta, h
     """
     n_arms = len(true_means)
     # UniformAlgo peut ne pas exister dans tous les modules — fallback sur le standard
-    _base = usable_adaptative_algorithm
+    _base = adaptative_algorithm
     tmp = _base.UniformAlgo(n_arms, mu_0, delta)
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -572,9 +596,9 @@ with st.sidebar:
         "Version de l'algorithme",
         options=list(ALGO_OPTIONS.keys()),
         help=(
-            "Standard : algorithme original (Jamieson & Jain).\n"
-            "Fusion v2/v3 : versions étendues avec Normal Mixture CS.\n"
-            "→ Choisir Continue pour les lois normales, Binaire pour les lois de Bernoulli."
+            "Simple : algorithme original.\n"
+            "Fusion V2 : module unique NM/NM_M2, utilisable en Normale et Binomiale.\n"
+            "Fusion V3 : betting, choisir Continue pour Normale et Binaire pour Bernoulli."
         ),
     )
     st.markdown("---")
@@ -660,6 +684,9 @@ def current_cfg():
 
 if run_button:
     cfg = current_cfg()
+    validation_msg = validate_algo_distribution(cfg["algo_name"], dist_type)
+    if validation_msg:
+        st.warning(f"⚠️ {validation_msg}")
     algo_module, import_err = load_algo_module(cfg["algo_name"])
     if import_err:
         st.warning(f"⚠️ Module '{cfg['algo_name']}' introuvable — fallback sur Standard.\n\n`{import_err}`")
@@ -672,7 +699,11 @@ if run_button:
     st.success("✅ Simulation terminée avec succès !")
 
 if add_to_queue_button:
-    st.session_state.test_configs.append(current_cfg())
+    cfg = current_cfg()
+    validation_msg = validate_algo_distribution(cfg["algo_name"], dist_type)
+    if validation_msg:
+        st.warning(f"⚠️ {validation_msg}")
+    st.session_state.test_configs.append(cfg)
     st.success(f"Test #{len(st.session_state.test_configs)} ajouté à la file.")
 
 # =============================================================================
@@ -689,7 +720,9 @@ if st.session_state.single_result is not None:
             metadata = {
                 'n_arms': cfg['n_arms'], 'delta': cfg['delta'],
                 'horizon': cfg['horizon'], 'n_sims': cfg['n_sims'],
-                'sigma': cfg['sigma'], 'mu_0': cfg['mu_0'], 'batch': False,
+                'sigma': cfg['sigma'], 'mu_0': cfg['mu_0'],
+                'algo_name': cfg.get('algo_name', 'Simple (original)'),
+                'batch': False,
             }
             payload = build_payload(cfg, st.session_state.single_result)
             path = save_simulation(sim_name, metadata, payload)
@@ -705,6 +738,7 @@ st.subheader(f"🗂️ File d'attente ({len(st.session_state.test_configs)} test
 if st.session_state.test_configs:
     for i, cfg in enumerate(st.session_state.test_configs):
         with st.expander(f"Test #{i+1} — δ={cfg['delta']}, T={cfg['horizon']}, σ={cfg['sigma']}"):
+            st.write(f"**Algo:** {cfg.get('algo_name', 'Simple (original)')}")
             st.write(f"**Bras:** {cfg['n_arms']}, **Sims:** {cfg['n_sims']}, **Loi:** {cfg['dist_type']}")
             st.write(f"**Moyennes:** {cfg['true_means']}")
             st.write(f"**μ₀:** {cfg['mu_0']}, **Init pulls:** {cfg['init_nb']}, **Init choice:** {cfg['init_choice']}")
@@ -743,7 +777,7 @@ if st.session_state.run_batch_requested and st.session_state.test_configs:
 
         result = run_single_experiment(
             cfg, cfg['dist_type'],
-            load_algo_module(cfg.get("algo_name", "Standard (original)"))[0]
+            load_algo_module(cfg.get("algo_name", "Simple (original)"))[0]
         )
 
         # Sauvegarde auto
@@ -864,10 +898,11 @@ if st.session_state.single_result is None and not st.session_state.test_results:
     st.markdown("""
 ## Bienvenue sur le simulateur d'algorithmes de bandit !
 
-Cette application permet de comparer deux algorithmes :
+Cette application permet de comparer les stratégies d'échantillonnage pour plusieurs backends :
 
 - **Adaptive** (Jamieson & Jain 2018) : stratégie UCB, alloue plus de tirages aux bras prometteurs.
 - **Uniform** : échantillonne tous les bras de manière uniforme.
+- **Backends disponibles** : Simple, Fusion V2 NM/NM_M2, Fusion V3 betting continu/binaire.
 
 ### Comment utiliser :
 1. Ajustez les paramètres dans la barre latérale.

@@ -28,6 +28,9 @@ class JamiesonJainAlgo:
         self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
         self.time = 0
         self.S_t = set()
+        self.p_values = np.ones(n_arms, dtype=float)
+        self._p_values_ready = False
+        self._p_values_mu_0 = mu_0
         
         # History for visualization
         # Initialized with zeros for t=0
@@ -67,6 +70,40 @@ class JamiesonJainAlgo:
         num = max(0.0, num)
         
         return sigma * np.sqrt(num / t)
+
+    def _refresh_p_values(self, changed_arm_idx=None):
+        recalc_all = (
+            not self._p_values_ready
+            or changed_arm_idx is None
+            or self._p_values_mu_0 != self.mu_0
+        )
+
+        if recalc_all:
+            for i in range(self.n):
+                self.p_values[i] = self.get_anytime_pvalue(i)
+        else:
+            self.p_values[changed_arm_idx] = self.get_anytime_pvalue(changed_arm_idx)
+
+        self._p_values_ready = True
+        self._p_values_mu_0 = self.mu_0
+        return self.p_values
+
+    def _bh_from_p_values(self):
+        p_values_with_idx = [(self.p_values[i], i) for i in range(self.n)]
+        p_values_with_idx.sort(key=lambda x: x[0])
+
+        current_St = set()
+        for k in range(self.n, 0, -1):
+            p_val_k = p_values_with_idx[k - 1][0]
+            effective_delta = self.delta * k / self.n
+
+            if p_val_k <= effective_delta:
+                for rank in range(k):
+                    current_St.add(p_values_with_idx[rank][1])
+                break
+
+        self.S_t.update(current_St)
+        return self.p_values.tolist()
     
     def init_process(self, data):
         for arm_idx, arm_data in enumerate(data):
@@ -82,13 +119,8 @@ class JamiesonJainAlgo:
                 self.counts_evolution.append(self.counts.copy())
         
         # --- BH après init ---
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values_with_idx.sort(key=lambda x: x[0])
-        for k in range(self.n, 0, -1):
-            if p_values_with_idx[k-1][0] <= self.delta * k / self.n:
-                for rank in range(k):
-                    self.S_t.add(p_values_with_idx[rank][1])
-                break
+        self._refresh_p_values()
+        self._bh_from_p_values()
         # print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
 
 
@@ -196,36 +228,9 @@ class JamiesonJainAlgo:
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
-        
-        # 2. Calcul des p-values anytime pour tous les bras
-        # On stocke des tuples : (p_value, index_du_bras)
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
 
-        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
-        p_values_with_idx.sort(key=lambda x: x[0])
-        
-        # 4. Procédure de Benjamini-Hochberg classique
-        # On cherche le plus grand k tel que p_(k) <= delta * k / n
-        current_St = set()
-        
-        for k in range(self.n, 0, -1):
-            # Attention : les listes Python commencent à l'index 0
-            # Le k-ième élément est donc à l'index k - 1
-            p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
-            
-            # Dès qu'on trouve le plus grand k qui valide la condition
-            if p_val_k <= effective_delta:
-                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
-                for rank in range(k):
-                    discovered_arm_idx = p_values_with_idx[rank][1]
-                    current_St.add(discovered_arm_idx)
-                break # On a trouvé le max k, on arrête la boucle
-                
-        # 5. Mise à jour de l'ensemble global des découvertes
-        self.S_t.update(current_St)
-        return(p_values)
+        self._refresh_p_values(changed_arm_idx=arm_idx)
+        return self._bh_from_p_values()
 
     def get_anytime_pvalue(self, arm_idx):
         t = self.counts[arm_idx]
@@ -240,6 +245,14 @@ class JamiesonJainAlgo:
 
         sigma = np.sqrt(self.emp_vars[arm_idx] / (t-1)) if t > 1 else 1.0
 
+        objective_low = self.phi(t, 1e-12, sigma) - diff
+        if objective_low <= 0:
+            return 1e-15
+
+        objective_high = self.phi(t, 0.9999, sigma) - diff
+        if objective_high >= 0:
+            return 1.0
+
         def objective(p):
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
@@ -251,7 +264,7 @@ class JamiesonJainAlgo:
         except ValueError:
             # brentq échoue = pas de changement de signe entre les bornes
             # On vérifie quel cas on est :
-            if objective(1e-12) <= 0:
+            if objective_low <= 0:
                 # phi(t, 1e-12, sigma) < diff
                 # → l'évidence dépasse même le bound le plus strict
                 # → p-value extrêmement petite
@@ -284,6 +297,9 @@ class UniformAlgo:
         self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
         self.time = 0
         self.S_t = set()
+        self.p_values = np.ones(n_arms, dtype=float)
+        self._p_values_ready = False
+        self._p_values_mu_0 = mu_0
         
         # Historique pour visualisation
         # On initialise avec des zéros pour t=0
@@ -302,13 +318,8 @@ class UniformAlgo:
                 self.counts_evolution.append(self.counts.copy())
 
         # BH après init
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values_with_idx.sort(key=lambda x: x[0])
-        for k in range(self.n, 0, -1):
-            if p_values_with_idx[k-1][0] <= self.delta * k / self.n:
-                for rank in range(k):
-                    self.S_t.add(p_values_with_idx[rank][1])
-                break
+        self._refresh_p_values()
+        self._bh_from_p_values()
 
     def phi(self, t, delta_val, sigma=1.0):
         """
@@ -344,6 +355,40 @@ class UniformAlgo:
         num = max(0.0, num)
         
         return sigma * np.sqrt(num / t)
+
+    def _refresh_p_values(self, changed_arm_idx=None):
+        recalc_all = (
+            not self._p_values_ready
+            or changed_arm_idx is None
+            or self._p_values_mu_0 != self.mu_0
+        )
+
+        if recalc_all:
+            for i in range(self.n):
+                self.p_values[i] = self.get_anytime_pvalue(i)
+        else:
+            self.p_values[changed_arm_idx] = self.get_anytime_pvalue(changed_arm_idx)
+
+        self._p_values_ready = True
+        self._p_values_mu_0 = self.mu_0
+        return self.p_values
+
+    def _bh_from_p_values(self):
+        p_values_with_idx = [(self.p_values[i], i) for i in range(self.n)]
+        p_values_with_idx.sort(key=lambda x: x[0])
+
+        current_St = set()
+        for k in range(self.n, 0, -1):
+            p_val_k = p_values_with_idx[k - 1][0]
+            effective_delta = self.delta * k / self.n
+
+            if p_val_k <= effective_delta:
+                for rank in range(k):
+                    current_St.add(p_values_with_idx[rank][1])
+                break
+
+        self.S_t.update(current_St)
+        return self.p_values.tolist()
     
     def select_arm(self):
             """
@@ -383,36 +428,9 @@ class UniformAlgo:
         self.counts[arm_idx] += 1
         self.time += 1
         self.counts_evolution.append(self.counts.copy()) 
-        
-        # 2. Calcul des p-values anytime pour tous les bras
-        # On stocke des tuples : (p_value, index_du_bras)
-        p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
-        p_values = [pv for pv, idx in sorted(p_values_with_idx, key=lambda x: x[1])]  # réutilise, retrié par index de bras
 
-        # 3. Tri des p-values par ordre croissant (Complexité : O(n log n))
-        p_values_with_idx.sort(key=lambda x: x[0])
-        
-        # 4. Procédure de Benjamini-Hochberg classique
-        # On cherche le plus grand k tel que p_(k) <= delta * k / n
-        current_St = set()
-        
-        for k in range(self.n, 0, -1):
-            # Attention : les listes Python commencent à l'index 0
-            # Le k-ième élément est donc à l'index k - 1
-            p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
-            
-            # Dès qu'on trouve le plus grand k qui valide la condition
-            if p_val_k <= effective_delta:
-                # On ajoute tous les bras du rang 1 au rang k à notre ensemble
-                for rank in range(k):
-                    discovered_arm_idx = p_values_with_idx[rank][1]
-                    current_St.add(discovered_arm_idx)
-                break # On a trouvé le max k, on arrête la boucle
-                
-        # 5. Mise à jour de l'ensemble global des découvertes
-        self.S_t.update(current_St)
-        return(p_values)
+        self._refresh_p_values(changed_arm_idx=arm_idx)
+        return self._bh_from_p_values()
 
     def bh_update(self, arm_idx, observation):
         """
@@ -470,6 +488,14 @@ class UniformAlgo:
 
         sigma = np.sqrt(self.emp_vars[arm_idx] / (t-1) )if t > 1 else 1.0
 
+        objective_low = self.phi(t, 1e-12, sigma) - diff
+        if objective_low <= 0:
+            return 1e-15
+
+        objective_high = self.phi(t, 0.9999, sigma) - diff
+        if objective_high >= 0:
+            return 1.0
+
         def objective(p):
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
@@ -481,7 +507,7 @@ class UniformAlgo:
         except ValueError:
             # brentq échoue = pas de changement de signe entre les bornes
             # On vérifie quel cas on est :
-            if objective(1e-12) <= 0:
+            if objective_low <= 0:
                 # phi(t, 1e-12, sigma) < diff
                 # → l'évidence dépasse même le bound le plus strict
                 # → p-value extrêmement petite
@@ -517,7 +543,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     for t in range(0, horizon):
 
         # Select arm
-        if mode == 'adaptive' and variable_mu_choice == True:
+        if variable_mu_choice == True:
             algo.mu_0 = algo.emp_means[control_arm]
             arm = algo.select_arm()
             # we force the draw of the control arm
@@ -555,9 +581,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             len_arm = len(all_arm_data[no_sim][arm])
             # if we are at the end of the arm we start at zero again
             if all_arm_counts[arm] >= len_arm:
-                observation = all_arm_data[no_sim][arm][all_arm_counts[arm] - len_arm]
-                print("time", t, "all_arm_counts[arm]", all_arm_counts[arm], "len_arm", len_arm)
-                print("arm ended, recicling data for this arm: ", arm)
+                observation = np.random.choice(all_arm_data[no_sim][arm])
             else:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
 
@@ -635,7 +659,11 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     print("EXECUTION RUN EXP")
     n_arms = len(arms)
     if is_true_mean:
-        true_positives = [i for i, m in enumerate(arms) if m > mu_0]
+        if variable_mu_choice:
+            true_positives = [i for i, m in enumerate(arms)
+                              if i != control_arm and m > arms[control_arm]]
+        else:
+            true_positives = [i for i, m in enumerate(arms) if m > mu_0]
     else: 
         true_positives = None
 
@@ -654,10 +682,8 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     if mode not in algo_factory:
         raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
 
-    if variable_mu_choice and mode == "adaptive":
-        print(f"Simulation Mode: {mode.upper()} VAR ({n_simulations} runs)")
-    else:
-        print(f"Simulation Mode: {mode.upper()} ({n_simulations} runs)")
+    mode_label = f"{mode.upper()} VAR" if variable_mu_choice else mode.upper()
+    print(f"Simulation Mode: {mode_label} ({n_simulations} runs)")
 
     # --- Simulation loop ---
     for no_sim in tqdm(range(n_simulations)):
