@@ -255,10 +255,14 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
 # PART 3: FONCTIONS D'AFFICHAGE
 # =============================================================================
 
-def plot_tpr_comparison(tpr_adapt, tpr_unif, delta, sigma, n_sims):
+def plot_tpr_comparison(tpr_adapt, tpr_unif, delta, sigma, n_sims, fdr_adapt=None, fdr_unif=None):
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(tpr_adapt, label='Adaptive', color='#ff7f0e', linewidth=2)
-    ax.plot(tpr_unif, label='Uniform', color='#1f77b4', linestyle='--', linewidth=2)
+    
+    label_adapt = f"Adaptive (FDR={fdr_adapt:.3f})" if fdr_adapt is not None else "Adaptive"
+    label_unif  = f"Uniform  (FDR={fdr_unif:.3f})"  if fdr_unif  is not None else "Uniform"
+    
+    ax.plot(tpr_adapt, label=label_adapt, color='#ff7f0e', linewidth=2)
+    ax.plot(tpr_unif,  label=label_unif,  color='#1f77b4', linestyle='--', linewidth=2)
     ax.axhline(y=1.0, color='gray', linestyle=':', alpha=0.5)
     ax.set_xlabel("Temps (t)")
     ax.set_ylabel("Taux de Vrais Positifs (TPR)")
@@ -477,6 +481,9 @@ def render_result_tabs(result, cfg, tab_prefix=""):
     counts_list_adapt = result['counts_list_adapt']
     pvalues_adapt_mean = result['pvalues_adapt_mean']
     pvalues_unif_mean = result['pvalues_unif_mean']
+    m_adapt = compute_fdr_metrics(result['l_pos_adapt'], true_means, mu_0)
+    m_unif  = compute_fdr_metrics(result['l_pos_unif'],  true_means, mu_0)
+
 
     display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0)
     st.markdown("---")
@@ -494,7 +501,11 @@ def render_result_tabs(result, cfg, tab_prefix=""):
 
     with tabs[0]:
         st.subheader("Comparaison de la vitesse de découverte (TPR)")
-        fig = plot_tpr_comparison(tpr_adapt, tpr_unif, delta, sigma, n_sims)
+        fig = plot_tpr_comparison(
+            tpr_adapt, tpr_unif, delta, sigma, n_sims,
+            fdr_adapt=m_adapt['FDR_mean'],
+            fdr_unif=m_unif['FDR_mean'],
+        )
         st.pyplot(fig)
         plt.close(fig)
         st.info("Le TPR (True Positive Rate) mesure la proportion de bons bras correctement identifiés au cours du temps.")
