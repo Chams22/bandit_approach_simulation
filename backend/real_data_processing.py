@@ -19,18 +19,18 @@ RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "v2").lower()
 
 ALGORITHM_CONFIGS = {
     "simple": {
-        "continuous_module": "usable_adaptative_algorithm",
-        "binary_module": "usable_adaptative_algorithm",
+        "continuous_module": "adaptative_algorithm",
+        "binary_module": "adaptative_algorithm",
         "output_dir": "figure_real_data_simple",
     },
     "v2": {
-        "continuous_module": "usable_adaptative_algorithm_v2",
-        "binary_module": "usable_adaptative_algorithm_v2",
+        "continuous_module": "adaptative_algorithm_v2",
+        "binary_module": "adaptative_algorithm_v2",
         "output_dir": "figure_real_data_v2",
     },
     "v3": {
-        "continuous_module": "usable_adaptative_algorithm_continuous_v3",
-        "binary_module": "usable_adaptative_algorithm_binary_v3",
+        "continuous_module": "adaptative_algorithm_continuous_v3",
+        "binary_module": "adaptative_algorithm_binary_v3",
         "output_dir": "figure_real_data_v3",
     },
 }
@@ -296,32 +296,25 @@ if __name__ == "__main__":
             groupe_controle = donnees[control_arm]
             groupes_traitements = donnees[:control_arm]+donnees[control_arm+1:]
 
-            # --- TESTS STATISTIQUES ---
-            stat_f, p_value_anova = stats.f_oneway(*donnees)
-            print("=== ÉTAPE 1 : TEST GLOBAL (ANOVA) ===")
-            print(f"P-value de l'ANOVA : {p_value_anova:.5f}")
-
-            # Dunnett toujours calculé (utilisé aussi pour le graphe)
-            res_dunnett = stats.dunnett(*groupes_traitements, control=groupe_controle)
-
-            # Mapping : indice original du bras → p-value Dunnett
+            # --- TESTS STATISTIQUES (t-test par bras + correction BH) ---
+            from statsmodels.stats.multitest import multipletests
             indices_traitements = [i for i in range(n_arms) if i != control_arm]
-            dunnett_pvals = dict(zip(indices_traitements, res_dunnett.pvalue))
-            liste_vrai_positif = [idx for idx, p_val in dunnett_pvals.items() if p_val < 0.05]
+            p_values_raw = []
+            for groupe in groupes_traitements:
+                _, p = stats.ttest_ind(groupe, groupe_controle)
+                p_values_raw.append(p)
 
+            reject, q_values, _, _ = multipletests(p_values_raw, alpha=0.05, method='fdr_bh')
+            qval_dict = dict(zip(indices_traitements, q_values))
+            liste_vrai_positif = [idx for idx, q in qval_dict.items() if q < 0.05]
 
-            if p_value_anova < 0.05:
-                print("-> Résultat significatif.\n")
-                print("=== ÉTAPE 2 : TESTS POST-HOC (Test de Dunnett) ===")
-                for i, p_val in enumerate(res_dunnett.pvalue):
-                    nom = noms_traitements[i]
-                    moyenne_traitement = np.mean(groupes_traitements[i])
-                    moyenne_controle = np.mean(groupe_controle)
-                    significatif = "Oui" if p_val < 0.05 else "Non"
-                    effet = "Baisse" if moyenne_traitement < moyenne_controle else "Hausse"
-                    print(f"Contrôle vs {nom} | P-value = {p_val:.4f} | Significatif : {significatif} ({effet})")
-            else:
-                print("-> Résultat non significatif.")
+            print("=== TESTS PAR BRAS (t-test + correction BH / q-values) ===")
+            for i, (nom, q) in enumerate(zip(noms_traitements, q_values)):
+                moyenne_traitement = np.mean(groupes_traitements[i])
+                moyenne_controle = np.mean(groupe_controle)
+                significatif = "Oui" if q < 0.05 else "Non"
+                effet = "Baisse" if moyenne_traitement < moyenne_controle else "Hausse"
+                print(f"Contrôle vs {nom} | q-value = {q:.4f} | Significatif : {significatif} ({effet})")
 
             # --- VISUALISATION ---
             means = [np.mean(d) for d in donnees]
@@ -335,14 +328,14 @@ if __name__ == "__main__":
             n_obs_tri = [n_obs[i] for i in ordre]
             labels_tri = [labels_courts[i] for i in ordre]
 
-            # Couleurs basées sur Dunnett
+            # Couleurs basées sur q-values BH
             sig_flags = []
             for idx_orig in ordre:
                 if idx_orig == control_arm:
                     sig_flags.append('control')
                 else:
-                    p_val = dunnett_pvals[idx_orig]
-                    sig_flags.append('sig' if p_val < 0.05 else 'ns')
+                    q = qval_dict[idx_orig]
+                    sig_flags.append('sig' if q < 0.05 else 'ns')
 
             couleurs = []
             for flag in sig_flags:
@@ -361,7 +354,7 @@ if __name__ == "__main__":
             ax.axvline(x=means[control_arm], color='red', linestyle='--',
                        label=f'Moyenne contrôle ({means[control_arm]:.2f})')
 
-            # Annotations avec Dunnett
+            # Annotations avec q-values BH
             for idx_tri, idx_orig in enumerate(ordre):
                 m = means_tri[idx_tri]
                 ci = cis_tri[idx_tri]
@@ -370,8 +363,8 @@ if __name__ == "__main__":
                 if idx_orig == control_arm:
                     label = f'{m:.2f}  (n={n})'
                 else:
-                    p_val = dunnett_pvals[idx_orig]
-                    sig = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else ''
+                    q = qval_dict[idx_orig]
+                    sig = '***' if q < 0.001 else '**' if q < 0.01 else '*' if q < 0.05 else ''
                     label = f'{m:.2f}  (n={n}) {sig}'
 
                 ax.text(m + ci + 0.01 * max(means), idx_tri, label,
@@ -381,12 +374,12 @@ if __name__ == "__main__":
             ax.set_yticklabels(labels_tri, fontsize=8)
             ax.set_xlabel("Moyenne ± IC 95%")
             ax.set_title(f"Comparaison des bras : {name_data}\n"
-                        "ANOVA + post-hoc Dunnett | IC 95% (moyenne ± 1.96×SEM)",
+                        "t-test + correction BH (q-values) | IC 95% (moyenne ± 1.96×SEM)",
                         fontsize=14, fontweight='bold')
             ax.legend(loc='lower right')
             ax.grid(axis='x', linestyle='--', alpha=0.7, zorder=1)
 
-            ax.text(0.99, 0.02, '* p<0.05  ** p<0.01  *** p<0.001 (Dunnett)',
+            ax.text(0.99, 0.02, '* q<0.05  ** q<0.01  *** q<0.001 (BH / FDR)',
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
@@ -419,37 +412,31 @@ if __name__ == "__main__":
             noms_tous_groupes = [arm_test_clean[i] for i in indices_valides]
             noms_traitements = [arm_test_clean[i] for i in indices_valides if i != control_arm]
 
-            # --- TESTS STATISTIQUES ---
-            stat_chi2, p_val_globale, dof, expected = stats.chi2_contingency(tableau_contingence)
-            print("=== ÉTAPE 1 : TEST GLOBAL (Chi-deux) ===")
-            print(f"P-value globale : {p_val_globale:.5f}")
+            # --- TESTS STATISTIQUES (Fisher exact par bras + correction BH) ---
+            from statsmodels.stats.multitest import multipletests
+            ligne_controle = tableau_contingence[control_arm_filtre]
+            lignes_traitements = (tableau_contingence[:control_arm_filtre]
+                                + tableau_contingence[control_arm_filtre+1:])
+            indices_traitements_filtre = [i for i in range(len(indices_valides)) if i != control_arm_filtre]
 
-            if p_val_globale < 0.05:
-                print("-> Résultat significatif.\n")
-                print("=== ÉTAPE 2 : TESTS POST-HOC (Fisher exact + Bonferroni) ===")
+            p_values_raw = []
+            for ligne_traitement in lignes_traitements:
+                _, p = stats.fisher_exact([ligne_controle, ligne_traitement])
+                p_values_raw.append(p)
 
-                ligne_controle = tableau_contingence[control_arm_filtre]
-                lignes_traitements = (tableau_contingence[:control_arm_filtre]
-                                    + tableau_contingence[control_arm_filtre+1:])
-                nombre_de_comparaisons = len(lignes_traitements)
+            reject, q_values, _, _ = multipletests(p_values_raw, alpha=0.05, method='fdr_bh')
+            qval_dict_bin = dict(zip(indices_traitements_filtre, q_values))
 
-                for i, ligne_traitement in enumerate(lignes_traitements):
-                    nom = noms_traitements[i]
-                    sous_tableau = [ligne_controle, ligne_traitement]
-
-                    stat_odds, p_val_brute = stats.fisher_exact(sous_tableau)
-                    p_val_corrigee = min(p_val_brute * nombre_de_comparaisons, 1.0)
-
-                    total_controle = sum(ligne_controle)
-                    total_trait = sum(ligne_traitement)
-                    pct_controle = (ligne_controle[0] / total_controle) * 100 if total_controle > 0 else 0
-                    pct_trait = (ligne_traitement[0] / total_trait) * 100 if total_trait > 0 else 0
-
-                    significatif = "Oui" if p_val_corrigee < 0.05 else "Non"
-                    print(f"Contrôle ({pct_controle:.0f}%) vs {nom} ({pct_trait:.0f}%) "
-                        f"| P-val = {p_val_corrigee:.4f} | Significatif : {significatif}")
-            else:
-                print("-> Résultat non significatif.")
+            print("=== TESTS PAR BRAS (Fisher exact + correction BH / q-values) ===")
+            for i, (nom, q) in enumerate(zip(noms_traitements, q_values)):
+                ligne_traitement = lignes_traitements[i]
+                total_controle = sum(ligne_controle)
+                total_trait = sum(ligne_traitement)
+                pct_controle = (ligne_controle[1] / total_controle) * 100 if total_controle > 0 else 0
+                pct_trait = (ligne_traitement[1] / total_trait) * 100 if total_trait > 0 else 0
+                significatif = "Oui" if q < 0.05 else "Non"
+                print(f"Contrôle ({pct_controle:.0f}%) vs {nom} ({pct_trait:.0f}%) "
+                    f"| q-value = {q:.4f} | Significatif : {significatif}")
 #           # --- VISUALISATION ENRICHIE ---
             proportions = [ligne[1] / sum(ligne) for ligne in tableau_contingence]
             n_obs = [sum(ligne) for ligne in tableau_contingence]
@@ -462,17 +449,14 @@ if __name__ == "__main__":
                 cis.append((p - ci[0], ci[1] - p))  # erreur basse, erreur haute
 
             labels_courts = [nom[:25] + "…" if len(nom) > 25 else nom for nom in noms_tous_groupes]
-            # Pré-calcul de la significativité pour les couleurs
+            # Pré-calcul de la significativité pour les couleurs (q-values BH)
             sig_flags = []
             for i in range(len(proportions)):
                 if i == control_arm_filtre:
                     sig_flags.append('control')
                 else:
-                    sous_tableau = [tableau_contingence[control_arm_filtre],
-                                   tableau_contingence[i]]
-                    _, p_val = stats.fisher_exact(sous_tableau)
-                    p_val_corr = min(p_val * (len(proportions) - 1), 1.0)
-                    sig_flags.append('sig' if p_val_corr < 0.05 else 'ns')
+                    q = qval_dict_bin[i]
+                    sig_flags.append('sig' if q < 0.05 else 'ns')
             liste_vrai_positif = [indices_valides[i] for i, flag in enumerate(sig_flags) if flag == 'sig']
 
             couleurs = []
@@ -493,16 +477,13 @@ if __name__ == "__main__":
             ax.axvline(x=prop_controle, color='red', linestyle='--',
                        label=f'Contrôle ({prop_controle:.1%})')
             
-            # Annotation : proportion + n + significativité
+            # Annotation : proportion + n + significativité (q-values BH)
             for i, (p, n) in enumerate(zip(proportions, n_obs)):
                 if sig_flags[i] == 'control':
                     label = f'{p:.1%}  (n={n})'
                 else:
-                    sous_tableau = [tableau_contingence[control_arm_filtre],
-                                   tableau_contingence[i]]
-                    _, p_val = stats.fisher_exact(sous_tableau)
-                    p_val_corr = min(p_val * (len(proportions) - 1), 1.0)
-                    sig = '***' if p_val_corr < 0.001 else '**' if p_val_corr < 0.01 else '*' if p_val_corr < 0.05 else ''
+                    q = qval_dict_bin[i]
+                    sig = '***' if q < 0.001 else '**' if q < 0.01 else '*' if q < 0.05 else ''
                     label = f'{p:.1%}  (n={n}) {sig}'
 
                 ax.text(p + cis[i][1] + 0.005, i, label, va='center', fontsize=8)
@@ -511,13 +492,13 @@ if __name__ == "__main__":
             ax.set_yticklabels(labels_courts, fontsize=8)
             ax.set_xlabel("Proportion de succès ± IC 95%")
             ax.set_title(f"Proportion de succès par traitement : {name_data}\n"
-             "Chi-deux + post-hoc Fisher exact (Bonferroni) | IC 95% Wilson",
-             fontsize=14, fontweight='bold')    
+             "Fisher exact + correction BH (q-values) | IC 95% Wilson",
+             fontsize=14, fontweight='bold')
             ax.legend(loc='lower right')
             ax.grid(axis='x', linestyle='--', alpha=0.7, zorder=1)
 
             # Légende des étoiles
-            ax.text(0.99, 0.02, '* p<0.05  ** p<0.01  *** p<0.001 (Fisher + Bonferroni)',
+            ax.text(0.99, 0.02, '* q<0.05  ** q<0.01  *** q<0.001 (BH / FDR)',
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
