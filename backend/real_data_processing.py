@@ -11,11 +11,12 @@ import re
 
 
 # Choix facile de l'implémentation à lancer:
-#   "simple" -> usable_adaptative_algorithm.py
+#   "simple" -> adaptative_algorithm.py
 #   "v2"     -> module V2 fusionné NM/NM_M2
 #   "v3"     -> continuous_v3 / binary_v3
-#   "all"    -> lance simple, v2 et v3 dans des dossiers séparés
-RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "v3").lower()
+#   "sr"     -> successive rejects + même interface que les autres
+#   "all"    -> lance simple, v2, v3 et sr dans des dossiers séparés
+RUN_ALGO = os.environ.get("REAL_DATA_ALGO", "all").lower()
 
 ALGORITHM_CONFIGS = {
     "simple": {
@@ -32,6 +33,11 @@ ALGORITHM_CONFIGS = {
         "continuous_module": "adaptative_algorithm_continuous_v3",
         "binary_module": "adaptative_algorithm_binary_v3",
         "output_dir": "figure_real_data_v3",
+    },
+    "sr": {
+        "continuous_module": "adaptative_algorithm_successive_reject",
+        "binary_module": "adaptative_algorithm_successive_reject",
+        "output_dir": "figure_real_data_successive_reject",
     },
 }
 

@@ -47,6 +47,7 @@ ALGO_OPTIONS = {
     "Fusion V2 - NM/NM_M2": "adaptative_algorithm_v2",
     "Fusion V3 - Continue betting": "adaptative_algorithm_continuous_v3",
     "Fusion V3 - Binaire betting": "adaptative_algorithm_binary_v3",
+    "Successive Rejects - NM/NM_M2": "adaptative_algorithm_successive_reject",
 }
 
 LEGACY_ALGO_NAMES = {
@@ -59,6 +60,7 @@ LEGACY_ALGO_NAMES = {
     "usable_adaptative_algorithm_fusion_continuous_v3": "Fusion V3 - Continue betting",
     "Fusion V3 — Binaire betting": "Fusion V3 - Binaire betting",
     "usable_adaptative_algorithm_fusion_binary_v3": "Fusion V3 - Binaire betting",
+    "adaptative_algorithm_successive_reject": "Successive Rejects - NM/NM_M2",
 }
 
 
@@ -711,7 +713,8 @@ with st.sidebar:
         help=(
             "Simple : algorithme original.\n"
             "Fusion V2 : module unique NM/NM_M2, utilisable en Normale et Binomiale.\n"
-            "Fusion V3 : betting, choisir Continue pour Normale et Binaire pour Bernoulli."
+            "Fusion V3 : betting, choisir Continue pour Normale et Binaire pour Bernoulli.\n"
+            "Successive Rejects : stratégie SR avec inférence NM/NM_M2."
         ),
     )
     st.markdown("---")

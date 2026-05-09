@@ -193,11 +193,116 @@ class SuccessiveRejectsAlgo:
         return self.bh_update_optimized(arm_idx, observation)
 
 
+# Alias kept so this module exposes the same adaptive class name as the other
+# algorithm files.
+JamiesonJainAlgo = SuccessiveRejectsAlgo
+
+
+# =============================================================================
+# UNIFORM ALGORITHM
+# =============================================================================
+class UniformAlgo:
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2',
+                 control_arm_idx=None):
+        """
+        Uniform random sampling with the same NM/BH inference as SuccessiveRejectsAlgo.
+        """
+        if cs_type not in ('normal_mixture', 'nm_m2'):
+            raise ValueError("UniformAlgo only supports 'normal_mixture' or 'nm_m2'.")
+
+        self.n = n_arms
+        self.mu_0 = mu_0
+        self.delta = delta
+        self.rho = max(float(rho), 1e-12)
+        self.cs_type = cs_type
+        self.control_arm_idx = control_arm_idx
+
+        self.counts = np.zeros(n_arms, dtype=int)
+        self.emp_means = np.zeros(n_arms, dtype=float)
+        self.emp_vars = np.zeros(n_arms, dtype=float)
+        self.time = 0
+        self.S_t = set()
+        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+
+    def _update_stats(self, arm_idx, observation):
+        n = self.counts[arm_idx]
+        old_mean = self.emp_means[arm_idx]
+        self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
+        new_mean = self.emp_means[arm_idx]
+        if self.cs_type == 'normal_mixture':
+            self.emp_vars[arm_idx] += (observation - old_mean) ** 2
+        else:
+            self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+
+    def phi(self, t, delta_val, var_stat):
+        if t == 0:
+            return float('inf')
+        log_term = max(0.0, np.log(np.sqrt((var_stat + self.rho) / self.rho) / delta_val))
+        return np.sqrt(2 * (var_stat + self.rho) * log_term) / t
+
+    def get_anytime_pvalue(self, arm_idx):
+        t = self.counts[arm_idx]
+        if t == 0:
+            return 1.0
+        mu0_ref = (self.emp_means[self.control_arm_idx]
+                   if self.control_arm_idx is not None else self.mu_0)
+        diff = self.emp_means[arm_idx] - mu0_ref
+        if diff <= 0:
+            return 1.0
+        var_stat = self.emp_vars[arm_idx]
+        p = (np.sqrt((var_stat + self.rho) / self.rho)
+             * np.exp(-diff ** 2 * t ** 2 / (2 * (var_stat + self.rho))))
+        return float(np.clip(p, 1e-300, 1.0))
+
+    def init_process(self, data):
+        for arm_idx, arm_data in enumerate(data):
+            for obs in arm_data:
+                self._update_stats(arm_idx, obs)
+                self.counts[arm_idx] += 1
+                self.time += 1
+                self.counts_evolution.append(self.counts.copy())
+        self._bh_update_St()
+
+    def select_arm(self):
+        if self.control_arm_idx is not None:
+            candidates = [i for i in range(self.n) if i != self.control_arm_idx]
+            if not candidates:
+                return "stop"
+            return np.random.choice(candidates)
+        return np.random.randint(self.n)
+
+    def _bh_update_St(self):
+        if self.control_arm_idx is not None:
+            current_St = _two_sample_nm_lcb_discoveries(
+                self, k_start=self.n, delta_denominator=self.n)
+        else:
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            current_St = set()
+            for k in range(self.n, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / self.n:
+                    for rank in range(k):
+                        current_St.add(p_values_with_idx[rank][1])
+                    break
+        self.S_t.update(current_St)
+
+    def bh_update_optimized(self, arm_idx, observation):
+        self._update_stats(arm_idx, observation)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy())
+        self._bh_update_St()
+        return [self.get_anytime_pvalue(i) for i in range(self.n)]
+
+    def bh_update(self, arm_idx, observation):
+        return self.bh_update_optimized(arm_idx, observation)
+
+
 # =============================================================================
 # SIMULATION ENGINE  (mirror of adaptative_algorithm_v2.run_experiment)
 # =============================================================================
 
-def _run_single_simulation(algo, no_sim, all_arm_data, horizon,
+def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                            control_arm, init_nb, init_choice, variable_mu_choice,
                            n_arms, is_true_mean, true_positives):
     p_values_list = []
@@ -253,16 +358,17 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon,
     return run_pr, p_values_list
 
 
-def run_experiment(arms, mu_0, delta, horizon, all_arm_data, n_simulations,
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice,
                    is_true_mean, rho=0.01, cs_type='nm_m2'):
     """
-    Run the Successive Rejects experiment.
+    Run the experiment with the same public interface as adaptative_algorithm_v2.
 
-    Interface identical to adaptative_algorithm_v2.run_experiment,
-    except `mode` is not a parameter (always 'successive_rejects').
+    mode:
+        'adaptive' or 'successive_reject' -> SuccessiveRejectsAlgo
+        'uniform'                         -> UniformAlgo
     """
-    print(f"SUCCESSIVE REJECTS — cs_type={cs_type} | rho={rho} ({n_simulations} runs)")
+    print(f"EXECUTION SUCCESSIVE REJECT MODULE — cs_type={cs_type} | rho={rho}")
     n_arms = len(arms)
 
     if is_true_mean:
@@ -277,14 +383,43 @@ def run_experiment(arms, mu_0, delta, horizon, all_arm_data, n_simulations,
     pnb_list, counts_list, p_values_list_by_sim, list_positive = [], [], [], []
     counts_evolution_sum = np.zeros((horizon + 1, n_arms))
 
-    for no_sim in tqdm(range(n_simulations)):
-        algo = SuccessiveRejectsAlgo(
+    algo_factory = {
+        'adaptive': lambda: SuccessiveRejectsAlgo(
             n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
             control_arm_idx=control_arm if variable_mu_choice else None,
             horizon=horizon,
-        )
+        ),
+        'successive_reject': lambda: SuccessiveRejectsAlgo(
+            n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+            horizon=horizon,
+        ),
+        'successive_rejects': lambda: SuccessiveRejectsAlgo(
+            n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+            horizon=horizon,
+        ),
+        'sr': lambda: SuccessiveRejectsAlgo(
+            n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+            horizon=horizon,
+        ),
+        'uniform': lambda: UniformAlgo(
+            n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+        ),
+    }
+
+    if mode not in algo_factory:
+        raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
+
+    mode_label = f"{mode.upper()} VAR" if variable_mu_choice else mode.upper()
+    print(f"Simulation Mode: {mode_label} ({n_simulations} runs)")
+
+    for no_sim in tqdm(range(n_simulations)):
+        algo = algo_factory[mode]()
         run_pr, p_values_list = _run_single_simulation(
-            algo, no_sim, all_arm_data, horizon,
+            algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice,
             n_arms, is_true_mean, true_positives,
         )
@@ -301,9 +436,10 @@ def run_experiment(arms, mu_0, delta, horizon, all_arm_data, n_simulations,
     max_length = max(len(a) for a in p_values_list_by_sim)
     padded = np.full((n_simulations, max_length, n_arms), np.nan)
     for i, arr in enumerate(p_values_list_by_sim):
-        for j, pv in enumerate(arr):
-            padded[i, j, :len(pv)] = pv
+        arr_np = np.array(arr)
+        padded[i, :arr_np.shape[0], :] = arr_np
     np_p_values_mean = np.nanmean(padded, axis=0)
+    np_p_values_list_by_sim = padded
 
     return (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
-            p_values_list_by_sim, np_p_values_mean, list_positive)
+            np_p_values_list_by_sim, np_p_values_mean, list_positive)
