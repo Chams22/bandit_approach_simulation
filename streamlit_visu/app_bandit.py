@@ -35,7 +35,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from backend import adaptative_algorithm  # base module (always loaded)
+from backend import adaptative_algorithm_jj as adaptative_algorithm  # base module (always loaded)
 
 # Recharge uniquement en dev (mettre DEV_MODE=1 dans l'env pour activer)
 if os.environ.get("DEV_MODE") == "1":
@@ -43,24 +43,25 @@ if os.environ.get("DEV_MODE") == "1":
 
 # --- Mapping des algorithmes disponibles --------------------------------------
 ALGO_OPTIONS = {
-    "Simple (original)": "adaptative_algorithm",
-    "Fusion V2 - NM/NM_M2": "adaptative_algorithm_v2",
+    "Simple (original)": "adaptative_algorithm_jj",
+    "Fusion V2 - NM": "adaptative_algorithm_v2",
     "Fusion V3 - Continue betting": "adaptative_algorithm_continuous_v3",
     "Fusion V3 - Binaire betting": "adaptative_algorithm_binary_v3",
-    "Successive Rejects - NM/NM_M2": "adaptative_algorithm_successive_reject",
+    "Successive Rejects - NM": "adaptative_algorithm_successive_reject",
 }
 
 LEGACY_ALGO_NAMES = {
     "Simple (original usable)": "Simple (original)",
     "Standard (original)": "Simple (original)",
     "usable_adaptative_algorithm": "Simple (original)",
-    "Fusion V2 — NM/NM_M2": "Fusion V2 - NM/NM_M2",
-    "usable_adaptative_algorithm_fusion_v2": "Fusion V2 - NM/NM_M2",
+    "adaptative_algorithm": "Simple (original)",
+    "adaptative_algorithm_jj": "Simple (original)",
+    "usable_adaptative_algorithm_fusion_v2": "Fusion V2 - NM",
     "Fusion V3 — Continue betting": "Fusion V3 - Continue betting",
     "usable_adaptative_algorithm_fusion_continuous_v3": "Fusion V3 - Continue betting",
     "Fusion V3 — Binaire betting": "Fusion V3 - Binaire betting",
     "usable_adaptative_algorithm_fusion_binary_v3": "Fusion V3 - Binaire betting",
-    "adaptative_algorithm_successive_reject": "Successive Rejects - NM/NM_M2",
+    "adaptative_algorithm_successive_reject": "Successive Rejects - NM",
 }
 
 
@@ -712,9 +713,9 @@ with st.sidebar:
         options=list(ALGO_OPTIONS.keys()),
         help=(
             "Simple : algorithme original.\n"
-            "Fusion V2 : module unique NM/NM_M2, utilisable en Normale et Binomiale.\n"
+            "Fusion V2 : module unique NM, utilisable en Normale et Binomiale.\n"
             "Fusion V3 : betting, choisir Continue pour Normale et Binaire pour Bernoulli.\n"
-            "Successive Rejects : stratégie SR avec inférence NM/NM_M2."
+            "Successive Rejects : stratégie SR avec inférence NM."
         ),
     )
     st.markdown("---")
@@ -1029,7 +1030,7 @@ Cette application permet de comparer les stratégies d'échantillonnage pour plu
 
 - **Adaptive** (Jamieson & Jain 2018) : stratégie UCB, alloue plus de tirages aux bras prometteurs.
 - **Uniform** : échantillonne tous les bras de manière uniforme.
-- **Backends disponibles** : Simple, Fusion V2 NM/NM_M2, Fusion V3 betting continu/binaire.
+- **Backends disponibles** : Simple, Fusion V2 NM, Fusion V3 betting continu/binaire.
 
 ### Comment utiliser :
 1. Ajustez les paramètres dans la barre latérale.

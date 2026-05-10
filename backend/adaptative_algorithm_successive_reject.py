@@ -57,10 +57,10 @@ class SuccessiveRejectsAlgo:
     the arm with the lowest empirical mean is then eliminated.
     """
 
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2',
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture',
                  control_arm_idx=None, horizon=10000):
-        if cs_type not in ('normal_mixture', 'nm_m2'):
-            raise ValueError("SuccessiveRejectsAlgo only supports 'normal_mixture' or 'nm_m2'.")
+        if cs_type != 'normal_mixture':
+            raise ValueError("SuccessiveRejectsAlgo only supports 'normal_mixture'.")
 
         self.n = n_arms
         self.mu_0 = mu_0
@@ -100,11 +100,7 @@ class SuccessiveRejectsAlgo:
         n = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
-        new_mean = self.emp_means[arm_idx]
-        if self.cs_type == 'normal_mixture':
-            self.emp_vars[arm_idx] += (observation - old_mean) ** 2
-        else:
-            self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
     def phi(self, t, delta_val, var_stat):
         if t == 0:
@@ -202,13 +198,13 @@ JamiesonJainAlgo = SuccessiveRejectsAlgo
 # UNIFORM ALGORITHM
 # =============================================================================
 class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2',
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture',
                  control_arm_idx=None):
         """
         Uniform random sampling with the same NM/BH inference as SuccessiveRejectsAlgo.
         """
-        if cs_type not in ('normal_mixture', 'nm_m2'):
-            raise ValueError("UniformAlgo only supports 'normal_mixture' or 'nm_m2'.")
+        if cs_type != 'normal_mixture':
+            raise ValueError("UniformAlgo only supports 'normal_mixture'.")
 
         self.n = n_arms
         self.mu_0 = mu_0
@@ -228,11 +224,7 @@ class UniformAlgo:
         n = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
-        new_mean = self.emp_means[arm_idx]
-        if self.cs_type == 'normal_mixture':
-            self.emp_vars[arm_idx] += (observation - old_mean) ** 2
-        else:
-            self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
     def phi(self, t, delta_val, var_stat):
         if t == 0:
@@ -377,7 +369,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice,
-                   is_true_mean, rho=0.01, cs_type='nm_m2',
+                   is_true_mean, rho=0.01, cs_type='normal_mixture',
                    return_discovery_times=False, history_record_every=1):
     """
     Run the experiment with the same public interface as adaptative_algorithm_v2.

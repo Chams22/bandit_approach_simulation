@@ -4,9 +4,8 @@ from tqdm import tqdm
 # -----------------------------------------------------------------------------
 # Fused V2 for Continuous or Binary Data
 # -----------------------------------------------------------------------------
-# V2 BH supports NM-style confidence sequences only:
+# V2 BH supports Normal Mixture confidence sequences only:
 #   'normal_mixture'  — Original V_hat (sum of squared prediction errors), rigorous
-#   'nm_m2'           — Uses M2 (Welford), tighter in practice, slight theoretical looseness
 # Betting BH is intentionally reserved for V3.
 # -----------------------------------------------------------------------------
 
@@ -69,13 +68,12 @@ class JamiesonJainAlgo:
         cs_type : str
             Confidence sequence type:
             - 'normal_mixture': Original V_hat NM (Howard et al., 2021). Rigorous.
-            - 'nm_m2': NM with M2 instead of V_hat. Default for fused V2.
         control_arm_idx : int or None
             If set, enables two-sample CS mode: tests mu_arm - mu_control > 0
             instead of mu_arm > mu_0. Default: None (single-sample mode).
         """
-        if cs_type not in ('normal_mixture', 'nm_m2'):
-            raise ValueError("V2 cs_type must be 'normal_mixture' or 'nm_m2'. Use V3 for betting BH.")
+        if cs_type != 'normal_mixture':
+            raise ValueError("V2 cs_type must be 'normal_mixture'. Use V3 for betting BH.")
 
         self.n = n_arms
         self.mu_0 = mu_0
@@ -94,27 +92,22 @@ class JamiesonJainAlgo:
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
     # -------------------------------------------------------------------------
-    # Statistics update — branching on cs_type
+    # Statistics update
     # -------------------------------------------------------------------------
     def _update_stats(self, arm_idx, observation):
         """
         Updates empirical statistics for a given arm.
 
-        - 'normal_mixture': accumulates V_hat = sum (X_i - X_bar_{i-1})^2
-        - 'nm_m2': accumulates M2 = sum (X_i - X_bar_{i-1})(X_i - X_bar_i)
+        Accumulates V_hat = sum (X_i - X_bar_{i-1})^2 for the Normal Mixture CS.
         """
         n = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
 
         # --- Update mean ---
         self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
-        new_mean = self.emp_means[arm_idx]
 
         # --- Update variance accumulator ---
-        if self.cs_type == 'normal_mixture':
-            self.emp_vars[arm_idx] += (observation - old_mean) ** 2
-        else:
-            self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
     # -------------------------------------------------------------------------
     # Confidence radius phi
@@ -139,7 +132,7 @@ class JamiesonJainAlgo:
         """
         Computes the anytime p-value for a given arm.
 
-        - 'normal_mixture' / 'nm_m2': Closed-form NM inversion.
+        - 'normal_mixture': Closed-form NM inversion.
         """
         t = self.counts[arm_idx]
         if t == 0:
@@ -194,7 +187,7 @@ class JamiesonJainAlgo:
     # -------------------------------------------------------------------------
     def select_arm(self):
         """
-        UCB-based arm selection. Uses phi(M2 or V_hat) for all cs_types.
+        UCB-based arm selection. Uses Normal Mixture phi for exploration.
         """
         unsampled = [i for i in range(self.n) if self.counts[i] == 0]
         if unsampled:
@@ -312,8 +305,8 @@ class UniformAlgo:
         """
         Uniform (random) sampling algorithm with the same CS options.
         """
-        if cs_type not in ('normal_mixture', 'nm_m2'):
-            raise ValueError("V2 cs_type must be 'normal_mixture' or 'nm_m2'. Use V3 for betting BH.")
+        if cs_type != 'normal_mixture':
+            raise ValueError("V2 cs_type must be 'normal_mixture'. Use V3 for betting BH.")
 
         self.n = n_arms
         self.mu_0 = mu_0
@@ -351,12 +344,7 @@ class UniformAlgo:
         old_mean = self.emp_means[arm_idx]
 
         self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
-        new_mean = self.emp_means[arm_idx]
-
-        if self.cs_type == 'normal_mixture':
-            self.emp_vars[arm_idx] += (observation - old_mean) ** 2
-        else:
-            self.emp_vars[arm_idx] += (observation - old_mean) * (observation - new_mean)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
 
     def phi(self, t, delta_val, var_stat):
         if t == 0:
@@ -573,7 +561,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     rho : float
         NM tuning parameter. Default: 0.01.
     cs_type : str
-        'normal_mixture' or 'nm_m2'. Default: 'nm_m2'.
+        Must be 'normal_mixture'.
     Returns
     -------
     pnb_history_mean, pnb_list, counts_history_mean, counts_list,

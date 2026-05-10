@@ -11,7 +11,7 @@ import re
 
 
 # Easy selection of implementations to run:
-#   "simple" -> adaptative_algorithm.py
+#   "simple" -> adaptative_algorithm_jj.py
 #   "v2"     -> fused V2 module NM/NM_M2
 #   "v3"     -> continuous_v3 / binary_v3
 #   "sr"     -> successive rejects with the same interface as the others
@@ -20,13 +20,24 @@ import re
 #   REAL_DATA_ALGO="v2"
 #   REAL_DATA_ALGOS="simple,v2"
 #   REAL_DATA_ALGO="all"
-DEFAULT_RUN_ALGOS = ["v2"]
+DEFAULT_RUN_ALGOS = ["sr"]
+
+# Easy selection of real datasets to process:
+#   "penn", "exercise", "effort", "walmart"
+#   "all" -> runs all datasets
+# You can edit this list directly, or use:
+#   REAL_DATA_DATASET="penn"
+#   REAL_DATA_DATASETS="penn,effort"
+#   REAL_DATA_DATASET="all"
+DATASET_KEYS = ("penn", "exercise", "effort", "walmart")
+DEFAULT_RUN_DATASETS = ["penn", "exercise", "effort", "walmart"]
+
 HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
 
 ALGORITHM_CONFIGS = {
     "simple": {
-        "continuous_module": "adaptative_algorithm",
-        "binary_module": "adaptative_algorithm",
+        "continuous_module": "adaptative_algorithm_jj",
+        "binary_module": "adaptative_algorithm_jj",
         "output_dir": "figure_real_data_simple",
     },
     "v2": {
@@ -46,19 +57,26 @@ ALGORITHM_CONFIGS = {
     },
 }
 
-def parse_run_algos(raw_value):
+def parse_selection(raw_value, default_values, all_values):
     if raw_value is None or raw_value.strip() == "":
-        return list(DEFAULT_RUN_ALGOS)
+        return list(default_values)
 
     normalized = raw_value.lower().replace(";", ",").replace(" ", ",")
     selected = [item.strip() for item in normalized.split(",") if item.strip()]
     if selected == ["all"]:
-        return list(ALGORITHM_CONFIGS.keys())
+        return list(all_values)
     return selected
 
 
-RUN_ALGOS = parse_run_algos(
-    os.environ.get("REAL_DATA_ALGOS", os.environ.get("REAL_DATA_ALGO"))
+RUN_ALGOS = parse_selection(
+    os.environ.get("REAL_DATA_ALGOS", os.environ.get("REAL_DATA_ALGO")),
+    DEFAULT_RUN_ALGOS,
+    ALGORITHM_CONFIGS.keys(),
+)
+RUN_DATASETS = parse_selection(
+    os.environ.get("REAL_DATA_DATASETS", os.environ.get("REAL_DATA_DATASET")),
+    DEFAULT_RUN_DATASETS,
+    DATASET_KEYS,
 )
 
 invalid_algos = [algo for algo in RUN_ALGOS if algo not in ALGORITHM_CONFIGS]
@@ -66,6 +84,13 @@ if invalid_algos:
     valid = ", ".join([*ALGORITHM_CONFIGS.keys(), "all"])
     raise ValueError(
         f"Unknown REAL_DATA_ALGO(S)={invalid_algos!r}. Choose one or more of: {valid}"
+    )
+
+invalid_datasets = [dataset for dataset in RUN_DATASETS if dataset not in DATASET_KEYS]
+if invalid_datasets:
+    valid = ", ".join([*DATASET_KEYS, "all"])
+    raise ValueError(
+        f"Unknown REAL_DATA_DATASET(S)={invalid_datasets!r}. Choose one or more of: {valid}"
     )
 
 if __name__ == "__main__" and len(RUN_ALGOS) > 1:
@@ -203,6 +228,7 @@ if __name__ == "__main__":
     print(f"\n=== Active usable algorithm: {RUN_ALGO.upper()} ===")
     print(f"Continuous module: {ACTIVE_ALGO_CONFIG['continuous_module']}")
     print(f"Binary module: {ACTIVE_ALGO_CONFIG['binary_module']}")
+    print(f"Active datasets: {', '.join(RUN_DATASETS)}")
     print(f"Output directory: {output_root}\n")
     print(f"History record every: {HISTORY_RECORD_EVERY} step(s)\n")
     plt.close('all')
@@ -212,25 +238,34 @@ if __name__ == "__main__":
     n_sims = 1
 
     datasets = {
-    "effort": (df_effort, "min_mean"),
+    "effort": (df_effort, 59),
     "exercise": (df_exercise, 53),
     "penn": (df_penn, 16),
     "walmart": (df_walmart, 3)
     }
 
+    invert_sign_datasets = {"effort"}
+
     results = {}
+    selected_datasets = {name: datasets[name] for name in RUN_DATASETS}
     
     print("\n--- Traitement des données ---")
-    for name, df in datasets.items():
+    for name, df in selected_datasets.items():
         print(f"Préparation de {name}...")
         # Function call
         data_sim, arm_names = prepare_real_experiment(df[0], n_sims)
         control_arm = df[1]
-        if control_arm == "min_mean":
-            arm_means = [mean(arm_data) for arm_data in data_sim[0]]
-            control_arm = int(np.argmin(arm_means))
-            print(f"   -> Contrôle auto min mean: arm {control_arm} ({arm_names[control_arm]}) "
-                  f"mean={arm_means[control_arm]:.4f}")
+        if name in invert_sign_datasets:
+            data_sim = [
+                [[-obs for obs in arm_data] for arm_data in simulation]
+                for simulation in data_sim
+            ]
+            print("   -> Effort sign inverted: detecting lower original outcomes as positive effects.")
+        if not 0 <= control_arm < len(arm_names):
+            raise ValueError(
+                f"Control arm {control_arm} is invalid for dataset {name} "
+                f"with {len(arm_names)} arms."
+            )
         # Stockage
         results[name] = {
             "data": data_sim,       # La liste de listes de listes
@@ -250,7 +285,7 @@ if __name__ == "__main__":
 
     # data_effort = results['effort']['data']
     # arm_effort = results['effort']['arm_names']
-    # control_arm = min mean arm
+    # control_arm = 59, with sign-inverted observations for lower-is-better testing
 
     # data_walmart = results['walmart']['data']
     # arm_walmart = results['walmart']['arm_names']
