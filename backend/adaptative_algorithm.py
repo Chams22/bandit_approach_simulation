@@ -25,7 +25,7 @@ class JamiesonJainAlgo:
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
-        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
+        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2: sum of squared deviations
         self.time = 0
         self.S_t = set()
         self.p_values = np.ones(n_arms, dtype=float)
@@ -118,7 +118,7 @@ class JamiesonJainAlgo:
                 self.time += 1
                 self.counts_evolution.append(self.counts.copy())
         
-        # --- BH après init ---
+        # --- BH after init ---
         self._refresh_p_values()
         self._bh_from_p_values()
         # print(f"DEBUG INIT: emp_means={self.emp_means}, p_values={[pv for pv,_ in sorted(p_values_with_idx, key=lambda x: x[1])]}, S_t={self.S_t}")
@@ -140,7 +140,7 @@ class JamiesonJainAlgo:
         int or str
             The index of the arm to pull, or "stop" if all arms are discovered.
         """
-        # S'assurer que chaque bras a été tiré au moins une fois
+        # Make sure each arm has been pulled at least once
         unsampled = [i for i in range(self.n) if self.counts[i] == 0]
         if unsampled:
             return unsampled[0]
@@ -218,7 +218,7 @@ class JamiesonJainAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré (Welford)
+        # 1. Update statistics for the pulled arm (Welford)
         n_pulls = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
@@ -262,16 +262,16 @@ class JamiesonJainAlgo:
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # brentq échoue = pas de changement de signe entre les bornes
-            # On vérifie quel cas on est :
+            # brentq fails when there is no sign change between bounds
+            # Check which case applies:
             if objective_low <= 0:
                 # phi(t, 1e-12, sigma) < diff
-                # → l'évidence dépasse même le bound le plus strict
-                # → p-value extrêmement petite
+                # -> evidence exceeds even the strictest bound
+                # -> extremely small p-value
                 return 1e-15
             else:
-                # phi(t, 0.9999, sigma) > diff (très rare)
-                # → même le test le plus laxiste ne rejette pas
+                # phi(t, 0.9999, sigma) > diff (very rare)
+                # -> even the loosest test does not reject
                 return 1.0
         
 class UniformAlgo:
@@ -294,7 +294,7 @@ class UniformAlgo:
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
-        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2 : somme des carrés des écarts
+        self.emp_vars = np.zeros(n_arms, dtype=float)  # Welford M2: sum of squared deviations
         self.time = 0
         self.S_t = set()
         self.p_values = np.ones(n_arms, dtype=float)
@@ -302,7 +302,7 @@ class UniformAlgo:
         self._p_values_mu_0 = mu_0
         
         # Historique pour visualisation
-        # On initialise avec des zéros pour t=0
+        # Initialize with zeros for t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
     def init_process(self, data):
@@ -317,7 +317,7 @@ class UniformAlgo:
                 self.time += 1
                 self.counts_evolution.append(self.counts.copy())
 
-        # BH après init
+        # BH after init
         self._refresh_p_values()
         self._bh_from_p_values()
 
@@ -418,7 +418,7 @@ class UniformAlgo:
         observation : float
             The reward/value observed from the arm.
         """
-        # 1. Mise à jour des statistiques du bras tiré (Welford)
+        # 1. Update statistics for the pulled arm (Welford)
         n_pulls = self.counts[arm_idx]
         old_mean = self.emp_means[arm_idx]
         self.emp_means[arm_idx] = (old_mean * n_pulls + observation) / (n_pulls + 1)
@@ -505,16 +505,16 @@ class UniformAlgo:
             p_value = brentq(objective, 1e-12, 0.9999)
             return p_value
         except ValueError:
-            # brentq échoue = pas de changement de signe entre les bornes
-            # On vérifie quel cas on est :
+            # brentq fails when there is no sign change between bounds
+            # Check which case applies:
             if objective_low <= 0:
                 # phi(t, 1e-12, sigma) < diff
-                # → l'évidence dépasse même le bound le plus strict
-                # → p-value extrêmement petite
+                # -> evidence exceeds even the strictest bound
+                # -> extremely small p-value
                 return 1e-15
             else:
-                # phi(t, 0.9999, sigma) > diff (très rare)
-                # → même le test le plus laxiste ne rejette pas
+                # phi(t, 0.9999, sigma) > diff (very rare)
+                # -> even the loosest test does not reject
                 return 1.0
             
 
@@ -584,10 +584,10 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                     algo.counts_evolution.append(last_counts.copy())
                 
             # 3. Rattrapage pour p_values_list (LA CORRECTION)
-            # On récupère la dernière liste de p-values calculée (ou on met 1.0 par défaut si vide)
+            # Reuse the last computed p-value list (or default to 1.0 if empty)
             last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
             for step in range(current_done + 1, horizon + 1):
-                # On utilise list() pour créer une copie indépendante à chaque itération
+                # Use list() to create an independent copy at each iteration
                 if _should_record_history(step, horizon, history_record_every):
                     p_values_list.append(list(last_p_values))
             break
@@ -740,22 +740,22 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         p_values_list_by_sim.append(p_values_list)
         discovery_times_list.append(discovery_times)
     # --- Compute pnb_history_mean ---
-    # Toutes les simulations ont exactement 'horizon' entrées (garantie par le padding dans _run_single_simulation)
+    # Every simulation has exactly 'horizon' entries (guaranteed by padding in _run_single_simulation)
     pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
 
     counts_history_mean = counts_evolution_sum / n_simulations
 
     # --- Compute np_p_values_mean ---
-    # 1. On trouve le nombre maximum d'itérations parmi toutes les simulations
+    # 1. Find the maximum number of iterations across simulations
     max_length = max(len(arr) for arr in p_values_list_by_sim)
     n_sims_total = len(p_values_list_by_sim)
-    # 2. On crée une grande matrice 3D vide remplie de NaN (Not a Number)
+    # 2. Create a large empty 3D matrix filled with NaN (Not a Number)
     padded_array = np.full((n_sims_total, max_length, n_arms), np.nan)
-    # 3. On insère chaque simulation dans cette matrice
+    # 3. Insert each simulation into this matrix
     for i, arr in enumerate(p_values_list_by_sim):
         arr_np = np.array(arr)
         padded_array[i, :arr_np.shape[0], :] = arr_np
-    # 4. On calcule la moyenne en ignorant les "trous" (NaN)
+    # 4. Compute the mean while ignoring gaps (NaN)
     np_p_values_mean = np.nanmean(padded_array, axis=0)
     np_p_values_list_by_sim = padded_array
     result = (pnb_history_mean, pnb_list, counts_history_mean, counts_list,

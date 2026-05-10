@@ -10,17 +10,17 @@ from statistics import mean, variance
 import re
 
 
-# Choix facile des implémentations à lancer:
+# Easy selection of implementations to run:
 #   "simple" -> adaptative_algorithm.py
-#   "v2"     -> module V2 fusionné NM/NM_M2
+#   "v2"     -> fused V2 module NM/NM_M2
 #   "v3"     -> continuous_v3 / binary_v3
-#   "sr"     -> successive rejects + même interface que les autres
-#   "all"    -> lance simple, v2, v3 et sr dans des dossiers séparés
-# Tu peux modifier cette liste directement, ou utiliser:
+#   "sr"     -> successive rejects with the same interface as the others
+#   "all"    -> runs simple, v2, v3, and sr in separate folders
+# You can edit this list directly, or use:
 #   REAL_DATA_ALGO="v2"
 #   REAL_DATA_ALGOS="simple,v2"
 #   REAL_DATA_ALGO="all"
-DEFAULT_RUN_ALGOS = ["v2", "v3"]
+DEFAULT_RUN_ALGOS = ["v2", "v3", "sr"]
 HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
 
 ALGORITHM_CONFIGS = {
@@ -95,9 +95,9 @@ else:
 
 
 
-# --- 1. CHARGEMENT DES DONNÉES (Votre code, légèrement nettoyé) ---
+# --- 1. DATA LOADING (original code, lightly cleaned) ---
 
-# Récupération des chemins
+# Path retrieval
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 
@@ -108,7 +108,7 @@ path_walmart = os.path.join(root_dir, 'data', 'processed', 'walmart.csv')
 
 # Lecture des fichiers
 df_effort0 = pd.read_csv(path_effort)
-# Petite sécurité : renommage si nécessaire pour effort (souvent 'workerId' ou 'mturk_id')
+# Small safety check: rename if needed for effort (often 'workerId' or 'mturk_id')
 if 'workerId' in df_effort0.columns: df_effort = df_effort0.rename(columns={'workerId': 'id'})
 elif 'participant_id' in df_effort0.columns: df_effort = df_effort0.rename(columns={'participant_id': 'id'})
 
@@ -124,7 +124,7 @@ df_exercise = df_exercise0[['id', 'y', 'arm']]
 df_penn = df_penn0[['id', 'y', 'arm']]
 df_walmart = df_walmart0[['id', 'y', 'arm']]
 
-# --- 2. NOUVELLE FONCTION DE PRÉPARATION ---
+# --- 2. NEW PREPARATION FUNCTION ---
 
 def prepare_real_experiment(df, n_sims):
     """
@@ -135,11 +135,11 @@ def prepare_real_experiment(df, n_sims):
         all_arm_data_by_sim: La structure de données (list of list of list)
         arm_names: La liste des noms de bras correspondant aux indices 0, 1, 2...
     """
-    # 1. On groupe par bras et on récupère tous les Y sous forme de liste
-    # On trie les bras par ordre alphabétique pour que l'index 0 soit toujours le même
+    # 1. Group by arm and collect all Y values as lists
+    # Sort arms alphabetically so index 0 is always the same
     grouped = df.groupby('arm')['y'].apply(list).sort_index()
     
-    # On récupère les noms des bras (ex: ['control', 'treatment_A', ...])
+    # Retrieve arm names (e.g. ['control', 'treatment_A', ...])
     arm_names = grouped.index.tolist()
     n_arms = len(arm_names)
     
@@ -149,13 +149,13 @@ def prepare_real_experiment(df, n_sims):
     for sim in range(n_sims):
         all_arm_data = []
         
-        # Pour chaque bras
+        # For each arm
         for arm_name in arm_names:
-            # On copie les données originales
+            # Copy the original data
             rewards = grouped[arm_name].copy()
             
-            # SHUFFLE : On mélange aléatoirement l'ordre des récompenses
-            # Cela simule un ordre d'arrivée différent des patients/participants à chaque simu
+            # SHUFFLE: randomly permute reward order
+            # This simulates a different arrival order for patients/participants in each simulation
             np.random.shuffle(rewards)
             
             all_arm_data.append(rewards)
@@ -164,18 +164,18 @@ def prepare_real_experiment(df, n_sims):
         
     return all_arm_data_by_sim, arm_names
 
-# --- 3. EXÉCUTION SUR TOUS LES DATASETS ---
+# --- 3. RUN ON ALL DATASETS ---
 
 def get_min_max_samples(all_arm_data):
     """
     Renvoie la taille du bras qui a le moins de données.
     Utile pour fixer l'horizon max de la simulation sans 'out of bounds'.
     """
-    # On prend la première simulation (index 0)
-    # car la quantité de données par bras est la même pour toutes les sims
+    # Use the first simulation (index 0)
+    # because the amount of data per arm is the same for all simulations
     first_simulation = all_arm_data[0]
     
-    # On calcule la longueur de chaque bras et on prend le minimum
+    # Compute each arm length and take the minimum
     min_len = min(len(arm_data) for arm_data in first_simulation)
     max_len = max(len(arm_data) for arm_data in first_simulation)
 
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     print("\n--- Traitement des données ---")
     for name, df in datasets.items():
         print(f"Préparation de {name}...")
-        # Appel de la fonction
+        # Function call
         data_sim, arm_names = prepare_real_experiment(df[0], n_sims)
         control_arm = df[1]
         if control_arm == "min_mean":
@@ -234,16 +234,16 @@ if __name__ == "__main__":
         # Stockage
         results[name] = {
             "data": data_sim,       # La liste de listes de listes
-            "arm_names": arm_names,  # Pour savoir que l'index 0 correspond à tel bras
+            "arm_names": arm_names,  # To know which arm index 0 corresponds to
             "control_arm": control_arm
         }
-        # Vérification rapide
+        # Quick check
         print(f"   -> {len(data_sim)} simulations générées.")
         print(f"   -> {len(arm_names)} bras trouvés.")
         print(f"   -> Exemple bras 0 ({arm_names[0]}): {len(data_sim[0][0])} observations.")
 
-    # --- 4. COMMENT UTILISER LES DONNÉES ---
-    # Exemple pour lancer votre run_experiment avec les données de PENN :
+# --- 4. HOW TO USE THE DATA ---
+    # Example to launch run_experiment with PENN data:
     # data_penn = results['penn']['data']
     # arm_penn = results['penn']['arm_names']
     # control_arm = 16
@@ -315,8 +315,8 @@ if __name__ == "__main__":
         # ==========================================
         # ANALYSE STATISTIQUE
         # ==========================================
-        # Choisissez "normal" pour des scores continus (0 à 10)
-        # Choisissez "bernouilli" pour du binaire (Douleur absente/présente)
+        # Choose "normal" for continuous scores (0 to 10)
+        # Choose "bernouilli" for binary data (pain absent/present)
         if name_data in ["penn", "walmart"]:
             type_de_loi = "bernouilli"
         else : 
@@ -334,7 +334,7 @@ if __name__ == "__main__":
             groupe_controle = donnees[control_arm]
             groupes_traitements = donnees[:control_arm]+donnees[control_arm+1:]
 
-            # --- TESTS STATISTIQUES (t-test par bras + correction BH) ---
+            # --- STATISTICAL TESTS (per-arm t-test + BH correction) ---
             from statsmodels.stats.multitest import multipletests
             indices_traitements = [i for i in range(n_arms) if i != control_arm]
             p_values_raw = []
@@ -366,7 +366,7 @@ if __name__ == "__main__":
             n_obs_tri = [n_obs[i] for i in ordre]
             labels_tri = [labels_courts[i] for i in ordre]
 
-            # Couleurs basées sur q-values BH
+            # Colors based on BH q-values
             sig_flags = []
             for idx_orig in ordre:
                 if idx_orig == control_arm:
@@ -425,9 +425,9 @@ if __name__ == "__main__":
             plt.close()
         elif type_de_loi == "bernouilli":
             # ==========================================
-            # CAS 1 : DONNÉES BINAIRES (penn et walmart = incitation à prendre un vaccin)
+            # CASE 1: BINARY DATA (penn and walmart = incentive to get a vaccine)
             # ==========================================
-            # --- TRANSFORMATION DES DONNÉES ---
+            # --- DATA TRANSFORMATION ---
             tableau_contingence = []
             indices_valides = []
             for idx, bras in enumerate(data_test[0]):
@@ -440,7 +440,7 @@ if __name__ == "__main__":
                     print(f"⚠️  Bras {idx} ('{arm_test_clean[idx]}') ignoré : "
                         f"données constantes ({absents} absents, {presents} présents)")
 
-            # Recalculer l'index du contrôle dans le tableau filtré
+            # Recompute the control index in the filtered table
             if control_arm in indices_valides:
                 control_arm_filtre = indices_valides.index(control_arm)
             else:
@@ -450,7 +450,7 @@ if __name__ == "__main__":
             noms_tous_groupes = [arm_test_clean[i] for i in indices_valides]
             noms_traitements = [arm_test_clean[i] for i in indices_valides if i != control_arm]
 
-            # --- TESTS STATISTIQUES (Fisher exact par bras + correction BH) ---
+            # --- STATISTICAL TESTS (per-arm Fisher exact test + BH correction) ---
             from statsmodels.stats.multitest import multipletests
             ligne_controle = tableau_contingence[control_arm_filtre]
             lignes_traitements = (tableau_contingence[:control_arm_filtre]
@@ -487,7 +487,7 @@ if __name__ == "__main__":
                 cis.append((p - ci[0], ci[1] - p))  # erreur basse, erreur haute
 
             labels_courts = [nom[:25] + "…" if len(nom) > 25 else nom for nom in noms_tous_groupes]
-            # Pré-calcul de la significativité pour les couleurs (q-values BH)
+            # Precompute significance for colors (BH q-values)
             sig_flags = []
             for i in range(len(proportions)):
                 if i == control_arm_filtre:
@@ -509,13 +509,13 @@ if __name__ == "__main__":
             y_pos = range(len(proportions))
 
             ax.barh(y_pos, proportions,
-                    xerr=list(zip(*cis)),  # asymétrique (bas, haut)
+                    xerr=list(zip(*cis)),  # asymmetric (lower, upper)
                     color=couleurs, edgecolor='black', capsize=3, zorder=2, height=0.6)
 
             ax.axvline(x=prop_controle, color='red', linestyle='--',
                        label=f'Contrôle ({prop_controle:.1%})')
             
-            # Annotation : proportion + n + significativité (q-values BH)
+            # Annotation: proportion + n + significance (BH q-values)
             for i, (p, n) in enumerate(zip(proportions, n_obs)):
                 if sig_flags[i] == 'control':
                     label = f'{p:.1%}  (n={n})'
@@ -535,7 +535,7 @@ if __name__ == "__main__":
             ax.legend(loc='lower right')
             ax.grid(axis='x', linestyle='--', alpha=0.7, zorder=1)
 
-            # Légende des étoiles
+            # Star legend
             ax.text(0.99, 0.02, '* q<0.05  ** q<0.01  *** q<0.001 (BH / FDR)',
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
@@ -603,7 +603,7 @@ if __name__ == "__main__":
         with open(dataset_output_dir / "resultats.txt", "r", encoding="utf-8") as f:
             contenu = f.read()
 
-        # Regex : capture le nom de la méthode et le contenu entre {}
+        # Regex: capture the method name and the content between {}
         pattern = r'(UNIF VAR|ADAPT VAR|UNIF|ADAPT)\s+\d+\.\s+\{([^}]*)\}'
         matches = re.findall(pattern, contenu)
         print(matches)
@@ -886,12 +886,12 @@ if __name__ == "__main__":
 
         fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
-        # Trouver les index des bras les plus tirés à la fin dans l'algo adaptatif
+        # Find the most-pulled arm indices at the end of the adaptive algorithm
         final_pulls = counts_adapt_mean[-1, :]
-        # Trie les index pour avoir les plus grands à la fin, on prend les 5 derniers
+        # Sort indices so the largest are at the end, then take the last 5
         top_arms_idx = np.argsort(final_pulls)[-5:] 
 
-        # On crée une palette de couleurs distinctes pour les top bras
+        # Create a distinct color palette for the top arms
         colors = plt.cm.tab10.colors 
 
         pull_datasets = [
@@ -922,7 +922,7 @@ if __name__ == "__main__":
                     linewidth = 1.0
                     color = 'grey'
                     alpha = 0.2
-                    label = "_nolegend_" # Ignore ce bras dans la légende
+                    label = "_nolegend_" # Ignore this arm in the legend
                     
                 ax.plot(time_axis_for(data_mean), data_mean[:, arm_idx], label=label, linewidth=linewidth, 
                         linestyle=linestyle, color=color, alpha=alpha)
@@ -933,7 +933,7 @@ if __name__ == "__main__":
 
         axes[0].set_ylabel("Number of pulls ($T_i(t)$)")
 
-        # Une petite légende propre avec uniquement les bras importants
+        # A small clean legend with only important arms
         handles, labels = axes[-1].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.0), ncol=6)
 
@@ -945,7 +945,7 @@ if __name__ == "__main__":
         plt.figure(3+num_graph*10, figsize=(14, 7))
         plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
 
-        # 1. Identifier les bras à mettre en valeur (ex: les 5 plus tirés à la fin)
+        # 1. Identify arms to highlight (e.g. the 5 most-pulled at the end)
         final_pulls = counts_adapt_mean[-1, :]
         top_arms_idx = np.argsort(final_pulls)[-5:] 
         colors = plt.cm.tab10.colors
@@ -955,19 +955,19 @@ if __name__ == "__main__":
             is_control = (arm_test[arm_idx] == 'control')
             is_top = (arm_idx in top_arms_idx)
             
-            # Définir le style selon l'importance du bras
+            # Set style according to arm importance
             if is_top or is_control:
                 base_color = 'black' if is_control else colors[color_counter % len(colors)]
                 linestyle = '--' if is_control else '-'
                 mean_linewidth = 2.5
-                sim_alpha = 0.15 # Les simulations individuelles restent discrètes
+                sim_alpha = 0.15 # Individual simulations remain subtle
                 label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
                 if not is_control: color_counter += 1
             else:
                 base_color = 'gray'
                 linestyle = '-'
                 mean_linewidth = 1.0
-                sim_alpha = 0.02 # Quasi-transparent pour les bras rejetés
+                sim_alpha = 0.02 # Nearly transparent for rejected arms
                 label = "_nolegend_"
 
             # Tracer les simulations individuelles (spaghetti)
@@ -975,7 +975,7 @@ if __name__ == "__main__":
                 plt.plot(time_axis_for(sim_counts), sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
                         linewidth=0.5, linestyle=linestyle)
 
-            # Tracer la moyenne par-dessus
+            # Plot the mean on top
             plt.plot(time_axis_for(counts_adapt_mean), counts_adapt_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
@@ -983,7 +983,7 @@ if __name__ == "__main__":
         plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
         plt.grid(True, alpha=0.3)
 
-        # Légende épurée
+        # Simplified legend
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
         plt.tight_layout()
@@ -1037,8 +1037,8 @@ if __name__ == "__main__":
         plt.figure(6+num_graph*10, figsize=(14, 7))
         plt.title(f"Adaptive VAR: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
 
-        # 1. Identifier les bras à mettre en valeur pour la variante VAR
-        # On utilise bien counts_adapt_v_mean ici
+        # 1. Identify arms to highlight for the VAR variant
+        # Make sure counts_adapt_v_mean is used here
         final_pulls_v = counts_adapt_v_mean[-1, :]
         top_arms_idx_v = np.argsort(final_pulls_v)[-5:] 
         colors = plt.cm.tab10.colors
@@ -1048,7 +1048,7 @@ if __name__ == "__main__":
             is_control = (arm_test[arm_idx] == 'control')
             is_top = (arm_idx in top_arms_idx_v)
             
-            # Définir le style selon l'importance du bras
+            # Set style according to arm importance
             if is_top or is_control:
                 base_color = 'black' if is_control else colors[color_counter % len(colors)]
                 linestyle = '--' if is_control else '-'
@@ -1060,7 +1060,7 @@ if __name__ == "__main__":
                 base_color = 'gray'
                 linestyle = '-'
                 mean_linewidth = 1.0
-                sim_alpha = 0.02 # Quasi-transparent pour éviter le bruit visuel
+                sim_alpha = 0.02 # Nearly transparent to reduce visual noise
                 label = "_nolegend_"
 
             # Tracer les simulations individuelles (spaghetti) depuis la liste VAR
@@ -1068,7 +1068,7 @@ if __name__ == "__main__":
                 plt.plot(time_axis_for(sim_counts), sim_counts[:, arm_idx], color=base_color, alpha=sim_alpha, 
                         linewidth=0.5, linestyle=linestyle)
 
-            # Tracer la moyenne par-dessus
+            # Plot the mean on top
             plt.plot(time_axis_for(counts_adapt_v_mean), counts_adapt_v_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
@@ -1076,7 +1076,7 @@ if __name__ == "__main__":
         plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
         plt.grid(True, alpha=0.3)
 
-        # Légende épurée
+        # Simplified legend
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
         print("Displaying Adaptive VAR plots...")
@@ -1095,10 +1095,10 @@ if __name__ == "__main__":
             ("Adaptive VAR", np_p_value_mean_adapt_v)
         ]
 
-        # Définir ton seuil de confiance (modifie cette variable si besoin)
+        # Define the confidence threshold (edit this variable if needed)
         delta_threshold = 0.05 
 
-        # On réutilise les top_arms pour garder une cohérence de couleurs avec le Plot 3
+        # Reuse top_arms to keep color consistency with Plot 3
         final_pulls = counts_adapt_mean[-1, :]
         top_arms_idx = np.argsort(final_pulls)[-5:] 
         colors = plt.cm.tab10.colors
@@ -1129,47 +1129,47 @@ if __name__ == "__main__":
                 ax.plot(time_axis_for(data), data[:, arm_idx], label=label, color=color, linewidth=linewidth, 
                         linestyle=linestyle, alpha=alpha)
             
-            # LE CHANGEMENT LE PLUS IMPORTANT : Échelle logarithmique
+            # THE MOST IMPORTANT CHANGE: logarithmic scale
             ax.set_yscale('log')
-            # Optionnel : inverser l'axe Y pour que la "découverte" (p-value qui chute) aille vers le haut
+            # Optional: invert the Y axis so the "discovery" (dropping p-value) moves upward
             # ax.invert_yaxis() 
             
-            # Ligne horizontale pour le seuil
+            # Horizontal threshold line
             ax.axhline(y=delta_threshold, color='red', linestyle=':', linewidth=2, 
                     label=f'Threshold ($\\delta={delta_threshold}$)')
             
             ax.set_xlabel("Time (t)")
             ax.set_ylabel("P-value (Log Scale)")
-            ax.grid(True, which="both", ls="-", alpha=0.2) # Grille adaptée au log
+            ax.grid(True, which="both", ls="-", alpha=0.2) # Grid adapted to log scale
 
-        # Légende unique en bas
+        # Single legend at the bottom
         handles, labels = axes[2].get_legend_handles_labels()
-        # On utilise un dict pour enlever les doublons potentiels (comme le seuil)
+        # Use a dict to remove potential duplicates (such as the threshold)
         by_label = dict(zip(labels, handles))
         fig.legend(by_label.values(), by_label.keys(), loc='lower center', 
                 bbox_to_anchor=(0.5, -0.15), ncol=6, fontsize='small')
 
         plt.tight_layout()
-        fig.subplots_adjust(bottom=0.25) # Place pour la légende
+        fig.subplots_adjust(bottom=0.25) # Space for the legend
 
         plt.savefig(dataset_output_dir / "figure4.png", dpi=300, bbox_inches="tight")
         plt.close()
 
     # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
 
-        # Définition explicite des couleurs pour chaque algorithme
+        # Explicit color definition for each algorithm
         color_unif = 'tab:blue'
         color_unif_v = 'tab:purple'
         color_adapt = 'tab:orange'
         color_adapt_v = 'tab:green'
 
-        # Création d'une grille : n_arms (lignes) x 1 (colonne)
-        # On réduit un peu la largeur (ex: 10) vu qu'il n'y a plus qu'une seule colonne
+        # Create a grid: n_arms (rows) x 1 (column)
+        # Slightly reduce width (e.g. 10) since there is only one column
         fig, axes = plt.subplots(nrows=n_arms, ncols=1, 
                                 figsize=(10, 2.5 * n_arms), 
                                 sharex=True)
 
-        # Sécurité au cas où il n'y aurait qu'un seul bras (axes ne serait pas une liste)
+        # Safety in case there is only one arm (axes would not be a list)
         if n_arms == 1:
             axes = [axes]
 
@@ -1177,10 +1177,10 @@ if __name__ == "__main__":
             ax = axes[arm_idx]
             arm_name = arm_test[arm_idx]
             
-            # Ajout du titre pour identifier de quel bras on parle sur cette ligne
+            # Add a title to identify which arm this row refers to
             ax.set_title(f"P-values evolution for Arm {arm_name}")
 
-            # Tracé des 3 trajectoires sur le MÊME graphique
+            # Plot the 3 trajectories on the SAME chart
             ax.plot(time_axis_for(np_p_value_mean_unif), np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
             ax.plot(time_axis_for(np_p_value_mean_unif_v), np_p_value_mean_unif_v[:, arm_idx], label="Uniform VAR", linewidth=2, color=color_unif_v)
             ax.plot(time_axis_for(np_p_value_mean_adapt), np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
@@ -1190,7 +1190,7 @@ if __name__ == "__main__":
             ax.legend(loc="upper right", fontsize="small")
             ax.grid(True, alpha=0.3)
 
-        # Ajout de l'axe des abscisses uniquement sur le tout dernier graphique du bas
+        # Add the x-axis only on the bottom-most chart
         axes[-1].set_xlabel("Time (t)")
 
         plt.tight_layout()

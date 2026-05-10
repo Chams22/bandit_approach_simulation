@@ -35,7 +35,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from backend import adaptative_algorithm  # module de base (toujours chargé)
+from backend import adaptative_algorithm  # base module (always loaded)
 
 # Recharge uniquement en dev (mettre DEV_MODE=1 dans l'env pour activer)
 if os.environ.get("DEV_MODE") == "1":
@@ -102,10 +102,10 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 CATALOG_FILE = os.path.join(SIMS_DIR, "sim_catalog.csv")
 
-SAFE_HORIZON_MARGIN = 100  # marge ajoutée partout pour éviter les IndexError
+SAFE_HORIZON_MARGIN = 100  # margin added everywhere to avoid IndexError
 
 # =============================================================================
-# PART 1: SAUVEGARDE / CHARGEMENT (système unifié)
+# PART 1: SAVE / LOAD (unified system)
 # =============================================================================
 
 def save_simulation(name, metadata, payload, base_dir=SIMS_DIR):
@@ -114,7 +114,7 @@ def save_simulation(name, metadata, payload, base_dir=SIMS_DIR):
     Fonction unifiée utilisée à la fois pour la sauvegarde manuelle (bouton
     "Confirmer la sauvegarde") et pour la sauvegarde automatique d'un batch.
     """
-    timestamp = int(time.time() * 1000)  # ms pour éviter les collisions batch
+    timestamp = int(time.time() * 1000)  # ms to avoid batch collisions
     filename = f"sim_{timestamp}.pkl"
     filepath = os.path.join(base_dir, filename)
 
@@ -661,7 +661,7 @@ def render_result_tabs(result, cfg, tab_prefix=""):
             c3.metric("Vrais positifs H1", str(sorted(m['H1'])))
             st.write(f"Dernière simulation — S_t : `{m['last_St']}`")
 
-            # --- Interprétation ---
+            # --- Interpretation ---
             n_H1 = len(m['H1'])
             fdr_pct = m['FDR_mean'] * 100
             tpr_pct = m['TPR_mean'] * 100
@@ -684,9 +684,9 @@ def render_result_tabs(result, cfg, tab_prefix=""):
 def init_state():
     defaults = {
         "test_configs": [],      # file d'attente (list[cfg])
-        "test_results": [],      # résultats des tests batch (list[dict])
-        "single_result": None,   # dernier résultat de simu simple (dict)
-        "single_cfg": None,      # config du dernier résultat simple
+        "test_results": [],      # batch test results (list[dict])
+        "single_result": None,   # latest single-simulation result (dict)
+        "single_cfg": None,      # config of the latest single result
         "run_batch_requested": False,
     }
     for k, v in defaults.items():
@@ -697,7 +697,7 @@ def init_state():
 init_state()
 
 # =============================================================================
-# PART 5: SIDEBAR — PARAMÈTRES
+# PART 5: SIDEBAR - PARAMETERS
 # =============================================================================
 
 st.title("🎰 Simulateur Interactif d'Algorithmes de Bandit")
@@ -733,7 +733,7 @@ with st.sidebar:
     if dist_type == "Normale":
         sigma = st.slider("Bruit (σ)", 0.1, 3.0, 0.5, 0.1)
     else:
-        sigma = 0.0  # pas de bruit paramétrique en Bernoulli
+        sigma = 0.0  # no parametric noise in Bernoulli
 
     delta = st.slider("Paramètre δ (FDR)", 0.01, 0.5, 0.05, 0.01)
 
@@ -799,12 +799,12 @@ def current_cfg():
         "n_arms": int(n_arms),
         "true_means": np.array(true_means),
         "dist_type": dist_type,
-        "algo_name": algo_choice,   # ← nom de l'algo sélectionné
+        "algo_name": algo_choice,   # <- selected algorithm name
         "variable_mu_choice": variable_mu_choice,
     }
 
 # =============================================================================
-# PART 6: ACTIONS — simu simple / ajout à la file
+# PART 6: ACTIONS - single simulation / add to queue
 # =============================================================================
 
 if run_button:
@@ -832,7 +832,7 @@ if add_to_queue_button:
     st.success(f"Test #{len(st.session_state.test_configs)} ajouté à la file.")
 
 # =============================================================================
-# PART 7: BLOC — SAUVEGARDE DU DERNIER RÉSULTAT SIMPLE
+# PART 7: BLOCK - SAVE LATEST SINGLE RESULT
 # =============================================================================
 
 if st.session_state.single_result is not None:
@@ -888,7 +888,7 @@ else:
     st.info("Ajoute des tests avec le bouton « ➕ Ajouter cette config à la file » dans la sidebar.")
 
 # =============================================================================
-# PART 9: EXÉCUTION DU BATCH
+# PART 9: BATCH EXECUTION
 # =============================================================================
 
 if st.session_state.run_batch_requested and st.session_state.test_configs:
@@ -926,12 +926,12 @@ if st.session_state.run_batch_requested and st.session_state.test_configs:
     st.rerun()
 
 # =============================================================================
-# PART 10: AFFICHAGE DES RÉSULTATS
+# PART 10: DISPLAY RESULTS
 # =============================================================================
 
 st.markdown("---")
 
-# A) Résultat de la dernière simu simple
+# A) Latest single-simulation result
 if st.session_state.single_result is not None:
     st.header("📊 Dernière simulation")
     render_result_tabs(
@@ -940,7 +940,7 @@ if st.session_state.single_result is not None:
         tab_prefix="single",
     )
 
-# B) Résultats de batch
+# B) Batch results
 if st.session_state.test_results:
     st.markdown("---")
     st.header(f"📦 Résultats du batch ({len(st.session_state.test_results)} tests)")
@@ -982,7 +982,7 @@ with st.expander("🗄️ Historique local des simulations"):
             )
             if st.button("Charger et afficher les graphiques", key="history_load"):
                 target_file = catalog.iloc[selected_idx]['filename']
-                # On cherche dans les deux dossiers possibles (manuel + batch)
+                # Search in both possible folders (manual + batch)
                 candidate_paths = [
                     os.path.join(SIMS_DIR, target_file),
                     os.path.join(RESULTS_DIR, target_file),
@@ -1018,7 +1018,7 @@ with st.expander("🗄️ Historique local des simulations"):
         st.info("Aucun historique trouvé.")
 
 # =============================================================================
-# PART 12: ÉCRAN D'ACCUEIL (si aucun résultat)
+# PART 12: HOME SCREEN (if no result)
 # =============================================================================
 
 if st.session_state.single_result is None and not st.session_state.test_results:

@@ -4,14 +4,14 @@ import numpy as np
 import os
 
 # ============================================================
-# PARAMÈTRES — adapte les chemins à tes fichiers pickle
+# PARAMETERS - adapt paths to your pickle files
 # ============================================================
 
-# Mets ici le chemin vers tes fichiers sauvegardés
+# Put the path to your saved files here
 # (ils sont dans batch_results/ ou saved_simulations/)
 RESULTS_DIR = "batch_results"  # ou "saved_simulations"
 
-# Associe chaque proportion à son fichier pickle
+# Map each proportion to its pickle file
 # Remplace les noms par les vrais noms de tes fichiers
 SIMULATIONS = {
     "1 / 9" : "sim_1777028900697.pkl",   # remplace par le vrai nom
@@ -25,7 +25,7 @@ SIMULATIONS = {
 COLORS = ["#e41a1c", "#ff7f00", "#4daf4a", "#377eb8", "#984ea3"]
 
 # ============================================================
-# GÉNÉRATION DU GRAPHE
+# CHART GENERATION
 # ============================================================
 
 fig, ax = plt.subplots(figsize=(9, 5))
