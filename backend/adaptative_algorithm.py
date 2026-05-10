@@ -7,7 +7,7 @@ from statistics import mean
 # PART 1: THE ALGORITHM
 # -----------------------------------------------------------------------------
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta):
+    def __init__(self, n_arms, mu_0, delta, control_arm_idx=None):
         """
         Initializes the adaptive bandit algorithm.
         Parameters
@@ -22,6 +22,7 @@ class JamiesonJainAlgo:
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
+        self.control_arm_idx = control_arm_idx
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
@@ -35,6 +36,30 @@ class JamiesonJainAlgo:
         # History for visualization
         # Initialized with zeros for t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)] # nb of draw of each arms
+
+    def _test_indices(self):
+        if self.control_arm_idx is None:
+            return list(range(self.n))
+        return [i for i in range(self.n) if i != self.control_arm_idx]
+
+    def _sigma_hat(self, arm_idx):
+        return np.sqrt(self.emp_vars[arm_idx] / (self.counts[arm_idx] - 1)) if self.counts[arm_idx] > 1 else 1.0
+
+    def _gap(self, arm_idx):
+        if self.control_arm_idx is None:
+            return self.emp_means[arm_idx] - self.mu_0
+        return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
+
+    def _combined_phi(self, arm_idx, delta_val):
+        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        if self.control_arm_idx is None:
+            return phi_arm
+        phi_control = self.phi(
+            self.counts[self.control_arm_idx],
+            delta_val,
+            self._sigma_hat(self.control_arm_idx),
+        )
+        return phi_arm + phi_control
 
     def phi(self, t, delta_val, sigma=1.0):
         """
@@ -75,6 +100,7 @@ class JamiesonJainAlgo:
         recalc_all = (
             not self._p_values_ready
             or changed_arm_idx is None
+            or changed_arm_idx == self.control_arm_idx
             or self._p_values_mu_0 != self.mu_0
         )
 
@@ -89,13 +115,18 @@ class JamiesonJainAlgo:
         return self.p_values
 
     def _bh_from_p_values(self):
-        p_values_with_idx = [(self.p_values[i], i) for i in range(self.n)]
+        test_indices = self._test_indices()
+        n_tests = len(test_indices)
+        if n_tests == 0:
+            return self.p_values.tolist()
+
+        p_values_with_idx = [(self.p_values[i], i) for i in test_indices]
         p_values_with_idx.sort(key=lambda x: x[0])
 
         current_St = set()
-        for k in range(self.n, 0, -1):
+        for k in range(n_tests, 0, -1):
             p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
+            effective_delta = self.delta * k / n_tests
 
             if p_val_k <= effective_delta:
                 for rank in range(k):
@@ -145,7 +176,7 @@ class JamiesonJainAlgo:
         if unsampled:
             return unsampled[0]
         
-        candidates = [i for i in range(self.n) if i not in self.S_t]
+        candidates = [i for i in self._test_indices() if i not in self.S_t]
         if not candidates:
             return "stop"
 
@@ -153,8 +184,10 @@ class JamiesonJainAlgo:
         selected = candidates[0]
         
         for i in candidates:
-            sigma = np.sqrt(self.emp_vars[i] / self.counts[i]) if self.counts[i] > 1 else 1.0
-            ucb = self.emp_means[i] + self.phi(self.counts[i], self.delta, sigma)
+            if self.control_arm_idx is None:
+                ucb = self.emp_means[i] + self._combined_phi(i, self.delta)
+            else:
+                ucb = self._gap(i) + self._combined_phi(i, self.delta)
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -190,13 +223,19 @@ class JamiesonJainAlgo:
         
         k_hat = 0
         current_St = set()
-        for k in range(self.n, 0, -1):
-            effective_delta = self.delta * k / self.n
+        test_indices = self._test_indices()
+        n_tests = len(test_indices)
+        for k in range(n_tests, 0, -1):
+            effective_delta = self.delta * k / n_tests
             passing_arms = []
-            for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / (self.counts[i] -1 )) if self.counts[i] > 1 else 1.0
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
-                if lcb >= self.mu_0:
+            for i in test_indices:
+                if self.control_arm_idx is None:
+                    lcb = self.emp_means[i] - self._combined_phi(i, effective_delta)
+                    is_passing = lcb >= self.mu_0
+                else:
+                    gap_lcb = self._gap(i) - self._combined_phi(i, effective_delta)
+                    is_passing = gap_lcb >= 0
+                if is_passing:
                     passing_arms.append(i)
             if len(passing_arms) >= k:
                 k_hat = k
@@ -236,27 +275,31 @@ class JamiesonJainAlgo:
         t = self.counts[arm_idx]
         emp_mean = self.emp_means[arm_idx]
         
+        if self.control_arm_idx is not None and arm_idx == self.control_arm_idx:
+            return 1.0
+
         if t == 0:
             return 1.0
         
-        diff = emp_mean - self.mu_0
+        if self.control_arm_idx is not None and self.counts[self.control_arm_idx] == 0:
+            return 1.0
+
+        diff = self._gap(arm_idx)
         if diff <= 0:
             return 1.0
 
-        sigma = np.sqrt(self.emp_vars[arm_idx] / (t-1)) if t > 1 else 1.0
-
-        objective_low = self.phi(t, 1e-12, sigma) - diff
+        objective_low = self._combined_phi(arm_idx, 1e-12) - diff
         if objective_low <= 0:
             return 1e-15
 
-        objective_high = self.phi(t, 0.9999, sigma) - diff
+        objective_high = self._combined_phi(arm_idx, 0.9999) - diff
         if objective_high >= 0:
             return 1.0
 
         def objective(p):
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
-            return self.phi(t, p, sigma) - diff
+            return self._combined_phi(arm_idx, p) - diff
 
         try:
             p_value = brentq(objective, 1e-12, 0.9999)
@@ -265,17 +308,17 @@ class JamiesonJainAlgo:
             # brentq fails when there is no sign change between bounds
             # Check which case applies:
             if objective_low <= 0:
-                # phi(t, 1e-12, sigma) < diff
+                # combined phi at 1e-12 is below diff
                 # -> evidence exceeds even the strictest bound
                 # -> extremely small p-value
                 return 1e-15
             else:
-                # phi(t, 0.9999, sigma) > diff (very rare)
+                # combined phi at 0.9999 is above diff (very rare)
                 # -> even the loosest test does not reject
                 return 1.0
         
 class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta):
+    def __init__(self, n_arms, mu_0, delta, control_arm_idx=None):
         """
         Initializes the Uniform (Round-Robin) sampling algorithm.
         
@@ -291,6 +334,7 @@ class UniformAlgo:
         self.n = n_arms
         self.mu_0 = mu_0
         self.delta = delta
+        self.control_arm_idx = control_arm_idx
         
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
@@ -304,6 +348,30 @@ class UniformAlgo:
         # Historique pour visualisation
         # Initialize with zeros for t=0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+
+    def _test_indices(self):
+        if self.control_arm_idx is None:
+            return list(range(self.n))
+        return [i for i in range(self.n) if i != self.control_arm_idx]
+
+    def _sigma_hat(self, arm_idx):
+        return np.sqrt(self.emp_vars[arm_idx] / (self.counts[arm_idx] - 1)) if self.counts[arm_idx] > 1 else 1.0
+
+    def _gap(self, arm_idx):
+        if self.control_arm_idx is None:
+            return self.emp_means[arm_idx] - self.mu_0
+        return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
+
+    def _combined_phi(self, arm_idx, delta_val):
+        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        if self.control_arm_idx is None:
+            return phi_arm
+        phi_control = self.phi(
+            self.counts[self.control_arm_idx],
+            delta_val,
+            self._sigma_hat(self.control_arm_idx),
+        )
+        return phi_arm + phi_control
 
     def init_process(self, data):
         for arm_idx, arm_data in enumerate(data):
@@ -360,6 +428,7 @@ class UniformAlgo:
         recalc_all = (
             not self._p_values_ready
             or changed_arm_idx is None
+            or changed_arm_idx == self.control_arm_idx
             or self._p_values_mu_0 != self.mu_0
         )
 
@@ -374,13 +443,18 @@ class UniformAlgo:
         return self.p_values
 
     def _bh_from_p_values(self):
-        p_values_with_idx = [(self.p_values[i], i) for i in range(self.n)]
+        test_indices = self._test_indices()
+        n_tests = len(test_indices)
+        if n_tests == 0:
+            return self.p_values.tolist()
+
+        p_values_with_idx = [(self.p_values[i], i) for i in test_indices]
         p_values_with_idx.sort(key=lambda x: x[0])
 
         current_St = set()
-        for k in range(self.n, 0, -1):
+        for k in range(n_tests, 0, -1):
             p_val_k = p_values_with_idx[k - 1][0]
-            effective_delta = self.delta * k / self.n
+            effective_delta = self.delta * k / n_tests
 
             if p_val_k <= effective_delta:
                 for rank in range(k):
@@ -402,6 +476,11 @@ class UniformAlgo:
             int
                 The index of the arm to pull.
             """
+            if self.control_arm_idx is not None:
+                candidates = self._test_indices()
+                if not candidates:
+                    return "stop"
+                return np.random.choice(candidates)
             return np.random.randint(self.n)
     
     def bh_update_optimized(self, arm_idx, observation):
@@ -461,13 +540,19 @@ class UniformAlgo:
         
         k_hat = 0
         current_St = set()
-        for k in range(self.n, 0, -1):
-            effective_delta = self.delta * k / self.n
+        test_indices = self._test_indices()
+        n_tests = len(test_indices)
+        for k in range(n_tests, 0, -1):
+            effective_delta = self.delta * k / n_tests
             passing_arms = []
-            for i in range(self.n):
-                sigma = np.sqrt(self.emp_vars[i] / (self.counts[i] -1)) if self.counts[i] > 1 else 1.0
-                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, sigma)
-                if lcb >= self.mu_0:
+            for i in test_indices:
+                if self.control_arm_idx is None:
+                    lcb = self.emp_means[i] - self._combined_phi(i, effective_delta)
+                    is_passing = lcb >= self.mu_0
+                else:
+                    gap_lcb = self._gap(i) - self._combined_phi(i, effective_delta)
+                    is_passing = gap_lcb >= 0
+                if is_passing:
                     passing_arms.append(i)
             if len(passing_arms) >= k:
                 k_hat = k
@@ -479,27 +564,31 @@ class UniformAlgo:
         t = self.counts[arm_idx]
         emp_mean = self.emp_means[arm_idx]
         
+        if self.control_arm_idx is not None and arm_idx == self.control_arm_idx:
+            return 1.0
+
         if t == 0:
             return 1.0
         
-        diff = emp_mean - self.mu_0
+        if self.control_arm_idx is not None and self.counts[self.control_arm_idx] == 0:
+            return 1.0
+
+        diff = self._gap(arm_idx)
         if diff <= 0:
             return 1.0
 
-        sigma = np.sqrt(self.emp_vars[arm_idx] / (t-1) )if t > 1 else 1.0
-
-        objective_low = self.phi(t, 1e-12, sigma) - diff
+        objective_low = self._combined_phi(arm_idx, 1e-12) - diff
         if objective_low <= 0:
             return 1e-15
 
-        objective_high = self.phi(t, 0.9999, sigma) - diff
+        objective_high = self._combined_phi(arm_idx, 0.9999) - diff
         if objective_high >= 0:
             return 1.0
 
         def objective(p):
             if p <= 0: return float('inf') 
             if p >= 1: return -float('inf')
-            return self.phi(t, p, sigma) - diff
+            return self._combined_phi(arm_idx, p) - diff
 
         try:
             p_value = brentq(objective, 1e-12, 0.9999)
@@ -508,12 +597,12 @@ class UniformAlgo:
             # brentq fails when there is no sign change between bounds
             # Check which case applies:
             if objective_low <= 0:
-                # phi(t, 1e-12, sigma) < diff
+                # combined phi at 1e-12 is below diff
                 # -> evidence exceeds even the strictest bound
                 # -> extremely small p-value
                 return 1e-15
             else:
-                # phi(t, 0.9999, sigma) > diff (very rare)
+                # combined phi at 0.9999 is above diff (very rare)
                 # -> even the loosest test does not reject
                 return 1.0
             
@@ -553,7 +642,6 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
         # Select arm
         if variable_mu_choice == True:
-            algo.mu_0 = algo.emp_means[control_arm]
             arm = algo.select_arm()
             # we force the draw of the control arm
             if all_arm_counts[control_arm] < max(all_arm_counts):
@@ -704,8 +792,14 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
     # --- Algo factory ---
     algo_factory = {
-        'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta),
-        'uniform':  lambda: UniformAlgo(n_arms, mu_0, delta),
+        'adaptive': lambda: JamiesonJainAlgo(
+            n_arms, mu_0, delta,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+        ),
+        'uniform':  lambda: UniformAlgo(
+            n_arms, mu_0, delta,
+            control_arm_idx=control_arm if variable_mu_choice else None,
+        ),
     }
 
     if mode not in algo_factory:

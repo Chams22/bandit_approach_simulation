@@ -20,7 +20,7 @@ import re
 #   REAL_DATA_ALGO="v2"
 #   REAL_DATA_ALGOS="simple,v2"
 #   REAL_DATA_ALGO="all"
-DEFAULT_RUN_ALGOS = ["v2", "v3", "sr"]
+DEFAULT_RUN_ALGOS = ["v2"]
 HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
 
 ALGORITHM_CONFIGS = {

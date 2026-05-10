@@ -51,7 +51,7 @@ def _two_sample_nm_lcb_discoveries(algo, k_start, delta_denominator,
 
 
 class JamiesonJainAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2', control_arm_idx=None):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture', control_arm_idx=None):
         """
         Initializes the adaptive bandit algorithm.
 
@@ -308,7 +308,7 @@ class JamiesonJainAlgo:
 # UNIFORM ALGORITHM
 # =============================================================================
 class UniformAlgo:
-    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='nm_m2', control_arm_idx=None):
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture', control_arm_idx=None):
         """
         Uniform (random) sampling algorithm with the same CS options.
         """
@@ -539,7 +539,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
-                   rho=0.01, cs_type='nm_m2', return_discovery_times=False,
+                   rho=0.01, cs_type='normal_mixture', return_discovery_times=False,
                    history_record_every=1):
     """
     Runs the bandit experiment.
