@@ -4,6 +4,8 @@ import os
 import importlib
 import subprocess
 import sys
+import pickle
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from statistics import mean, variance
@@ -12,7 +14,7 @@ import re
 
 # Easy selection of implementations to run:
 #   "simple" -> adaptative_algorithm_jj.py
-#   "v2"     -> fused V2 module NM/NM_M2
+#   "v2"     -> fused V2 module NM
 #   "v3"     -> continuous_v3 / binary_v3
 #   "sr"     -> successive rejects with the same interface as the others
 #   "all"    -> runs simple, v2, v3, and sr in separate folders
@@ -20,7 +22,7 @@ import re
 #   REAL_DATA_ALGO="v2"
 #   REAL_DATA_ALGOS="simple,v2"
 #   REAL_DATA_ALGO="all"
-DEFAULT_RUN_ALGOS = ["sr"]
+DEFAULT_RUN_ALGOS = ["simple", "v2", "v3", "sr"]
 
 # Easy selection of real datasets to process:
 #   "penn", "exercise", "effort", "walmart"
@@ -31,8 +33,20 @@ DEFAULT_RUN_ALGOS = ["sr"]
 #   REAL_DATA_DATASET="all"
 DATASET_KEYS = ("penn", "exercise", "effort", "walmart")
 DEFAULT_RUN_DATASETS = ["penn", "exercise", "effort", "walmart"]
+COMPARISON_DATASET_ORDER = ["effort", "exercise", "penn", "walmart"]
 
+# Cache and comparison switches:
+#   REAL_DATA_USE_CACHE=1      -> reload run_experiment_cache.pkl when available
+#   REAL_DATA_SAVE_CACHE=0     -> disable writing run_experiment_cache.pkl
+#   REAL_DATA_COMPARE_ALGOS=0  -> disable figure_algo_compar generation
+#   REAL_DATA_ONLY_COMPARISON=1 -> skip per-dataset classic plots, keep comparison plots
 HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
+USE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_USE_CACHE", "1").lower() in {"1", "true", "yes", "load"}
+SAVE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_SAVE_CACHE", "1").lower() not in {"0", "false", "no"}
+GENERATE_ALGO_COMPARISON = os.environ.get("REAL_DATA_COMPARE_ALGOS", "1").lower() not in {"0", "false", "no"}
+ONLY_COMPARISON_PLOTS = os.environ.get("REAL_DATA_ONLY_COMPARISON", "1").lower() in {"1", "true", "yes"}
+CACHE_FILENAME = "run_experiment_cache.pkl"
+CACHE_VERSION = 1
 
 ALGORITHM_CONFIGS = {
     "simple": {
@@ -93,15 +107,360 @@ if invalid_datasets:
         f"Unknown REAL_DATA_DATASET(S)={invalid_datasets!r}. Choose one or more of: {valid}"
     )
 
+
+MODE_SPECS = [
+    ("UNIF", "Uniform", "pnb_unif", "l_pos_unif", "discovery_unif", ":"),
+    ("UNIF VAR", "Uniform Var", "pnb_unif_v", "l_pos_unif_v", "discovery_unif_v", "-."),
+    ("ADAPT", "Adaptive", "pnb_adapt", "l_pos_adapt", "discovery_adapt", "-"),
+    ("ADAPT VAR", "Adaptive Var", "pnb_adapt_v", "l_pos_adapt_v", "discovery_adapt_v", "--"),
+]
+
+
+def find_project_root(start_path=None):
+    start = Path(start_path or __file__).resolve()
+    for parent in [start.parent, *start.parents]:
+        git_entry = parent / ".git"
+        if git_entry.is_dir() or git_entry.is_file():
+            return parent
+    return Path(__file__).resolve().parents[1]
+
+
+def save_experiment_cache(cache_path, payload):
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_experiment_cache(cache_path):
+    with open(cache_path, "rb") as f:
+        payload = pickle.load(f)
+    if payload.get("cache_version") != CACHE_VERSION:
+        raise ValueError(f"Unsupported cache version in {cache_path}")
+    return payload
+
+
+def _as_int_set(values):
+    if values is None:
+        return set()
+    return {int(x) for x in values}
+
+
+def _display_algo_name(algo_key):
+    return "JJ" if algo_key == "simple" else algo_key.upper()
+
+
+def _ordered_comparison_datasets(dataset_keys):
+    selected = set(dataset_keys)
+    ordered = [dataset for dataset in COMPARISON_DATASET_ORDER if dataset in selected]
+    ordered.extend(dataset for dataset in dataset_keys if dataset not in ordered)
+    return ordered
+
+
+def _final_sets(pos_list):
+    return [_as_int_set(s) for s in (pos_list or [])]
+
+
+def _mean_confusion(final_sets, true_positives, n_arms, control_arm):
+    true_set = _as_int_set(true_positives)
+    tested_arms = set(range(n_arms))
+    tested_arms.discard(int(control_arm))
+    if not final_sets:
+        final_sets = [set()]
+
+    rows = []
+    for detected in final_sets:
+        detected = _as_int_set(detected) & tested_arms
+        rows.append({
+            "TP": len(detected & true_set),
+            "FP": len(detected - true_set),
+            "FN": len(true_set - detected),
+            "TN": len(tested_arms - true_set - detected),
+        })
+    return {key: float(np.mean([row[key] for row in rows])) for key in ("TP", "FP", "FN", "TN")}
+
+
+def _auc_score(curve, denominator):
+    y = np.asarray(curve, dtype=float)
+    if y.size == 0:
+        return np.nan
+    denom = max(float(denominator), 1.0)
+    y = y / denom
+    if y.size == 1:
+        return float(y[0])
+    area = float(np.sum((y[:-1] + y[1:]) * 0.5))
+    return area / (y.size - 1)
+
+
+def _collect_cached_results(project_root, algo_keys, dataset_keys):
+    cached = {}
+    for algo_key in algo_keys:
+        config = ALGORITHM_CONFIGS[algo_key]
+        for dataset_key in dataset_keys:
+            cache_path = project_root / config["output_dir"] / dataset_key / CACHE_FILENAME
+            if not cache_path.exists():
+                print(f"[comparison] cache missing: {cache_path}")
+                continue
+            try:
+                cached[(algo_key, dataset_key)] = load_experiment_cache(cache_path)
+            except Exception as exc:
+                print(f"[comparison] could not read {cache_path}: {exc}")
+    return cached
+
+
+def generate_algorithm_comparison_figures(project_root, algo_keys, dataset_keys):
+    dataset_keys = _ordered_comparison_datasets(dataset_keys)
+    cached = _collect_cached_results(project_root, algo_keys, dataset_keys)
+    if not cached:
+        print("[comparison] no cache available, skipping figure_algo_compar.")
+        return
+
+    output_dir = project_root / "figure_algo_compar"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    algo_colors = {
+        key: color for key, color in zip(ALGORITHM_CONFIGS.keys(), plt.cm.tab10.colors)
+    }
+
+    summary_rows = []
+    for (algo_key, dataset_key), payload in cached.items():
+        true_positives = _as_int_set(payload["true_positives"])
+        n_true = len(true_positives)
+        n_arms = int(payload["n_arms"])
+        control_arm = int(payload["control_arm"])
+        for mode_key, mode_label, pnb_key, pos_key, _, _ in MODE_SPECS:
+            final_sets = _final_sets(payload.get(pos_key))
+            final_counts = [len(s) for s in final_sets] or [0]
+            confusion = _mean_confusion(final_sets, true_positives, n_arms, control_arm)
+            auc = _auc_score(payload.get(pnb_key, []), n_true)
+            summary_rows.append({
+                "algorithm": algo_key,
+                "dataset": dataset_key,
+                "mode": mode_label,
+                "mean_detected_positives": float(np.mean(final_counts)),
+                "n_true_positives": n_true,
+                "auc_discovery_curve": auc,
+                **confusion,
+            })
+
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(output_dir / "algo_comparison_summary.csv", index=False)
+
+    _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, output_dir)
+    _plot_found_positive_counts(summary_df, algo_keys, dataset_keys, output_dir)
+    _plot_confusion_counts(summary_df, algo_keys, dataset_keys, output_dir)
+    _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir)
+    print(f"[comparison] wrote algorithm comparison figures to {output_dir}")
+
+
+def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, output_dir):
+    ncols = min(2, max(1, len(dataset_keys)))
+    nrows = int(np.ceil(len(dataset_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(8 * ncols, 4.8 * nrows), squeeze=False)
+
+    flat_axes = axes.ravel()
+    for ax, dataset_key in zip(flat_axes, dataset_keys):
+        plotted = False
+        for algo_key in algo_keys:
+            payload = cached.get((algo_key, dataset_key))
+            if not payload:
+                continue
+            n_true = max(len(_as_int_set(payload["true_positives"])), 1)
+            for _, mode_label, pnb_key, _, _, linestyle in MODE_SPECS:
+                curve = np.asarray(payload.get(pnb_key, []), dtype=float)
+                if curve.size == 0:
+                    continue
+                ax.plot(
+                    np.arange(curve.size),
+                    curve / n_true,
+                    label=f"{_display_algo_name(algo_key)} - {mode_label}",
+                    color=algo_colors.get(algo_key, "black"),
+                    linestyle=linestyle,
+                    linewidth=2 if "Adaptive" in mode_label else 1.5,
+                    alpha=0.82 if "Adaptive" in mode_label else 0.58,
+                )
+                plotted = True
+        ax.axhline(1.0, color="black", linestyle=":", linewidth=1.0, alpha=0.5)
+        ax.set_title(f"{dataset_key.upper()} - normalized discovery trajectory")
+        ax.set_ylabel("Detected positives / number of statistically positive arms")
+        ax.set_xlabel("Round")
+        ax.grid(True, alpha=0.25)
+        if not plotted:
+            ax.text(0.5, 0.5, "No cached result", transform=ax.transAxes,
+                    ha="center", va="center", color="gray")
+
+    for ax in flat_axes[len(dataset_keys):]:
+        ax.axis("off")
+
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)),
+                   fontsize=8, bbox_to_anchor=(0.5, -0.01))
+    fig.suptitle(
+        "Algorithm comparison: discovery trajectories\n"
+        "Higher and earlier curves mean faster discovery. Values above 1 indicate extra discoveries beyond the classical positive set.",
+        fontsize=14, fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.04, 1, 0.94))
+    plt.savefig(output_dir / "positive_rate_curves.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def _plot_found_positive_counts(summary_df, algo_keys, dataset_keys, output_dir):
+    if summary_df.empty:
+        return
+    modes = [spec[1] for spec in MODE_SPECS]
+    ncols = min(2, max(1, len(dataset_keys)))
+    nrows = int(np.ceil(len(dataset_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
+    width = 0.18
+    offsets = np.linspace(-1.5 * width, 1.5 * width, len(modes))
+
+    flat_axes = axes.ravel()
+    for ax, dataset_key in zip(flat_axes, dataset_keys):
+        subset = summary_df[summary_df["dataset"] == dataset_key]
+        x = np.arange(len(algo_keys))
+        for offset, mode in zip(offsets, modes):
+            values = [
+                subset[(subset["algorithm"] == algo) & (subset["mode"] == mode)]["mean_detected_positives"].mean()
+                for algo in algo_keys
+            ]
+            ax.bar(x + offset, values, width=width, label=mode)
+        true_counts = subset.groupby("algorithm")["n_true_positives"].first()
+        if not true_counts.empty:
+            ax.axhline(float(true_counts.iloc[0]), color="black", linestyle=":",
+                       linewidth=1.2, label="Classical positive arms")
+        ax.set_title(dataset_key.upper())
+        ax.set_xticks(x)
+        ax.set_xticklabels([_display_algo_name(algo) for algo in algo_keys], rotation=35, ha="right")
+        ax.set_ylabel("Mean number of detected positive arms")
+        ax.grid(axis="y", alpha=0.25)
+
+    for ax in flat_axes[len(dataset_keys):]:
+        ax.axis("off")
+
+    handles, labels = flat_axes[min(len(dataset_keys), len(flat_axes)) - 1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=min(5, len(labels)),
+               bbox_to_anchor=(0.5, -0.03))
+    fig.suptitle(
+        "Final discoveries by algorithm and sampling mode\n"
+        "Bars show the mean final number of discovered arms; dotted line shows the classical BH-positive count.",
+        fontsize=14, fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.08, 1, 0.90))
+    plt.savefig(output_dir / "found_positive_counts.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def _plot_confusion_counts(summary_df, algo_keys, dataset_keys, output_dir):
+    if summary_df.empty:
+        return
+    dataset_keys = _ordered_comparison_datasets(dataset_keys)
+    colors = {"TP": "#2ca02c", "FP": "#d62728", "FN": "#ffbf00", "TN": "#9ecae1"}
+    modes = [spec[1] for spec in MODE_SPECS]
+    fig, axes = plt.subplots(len(dataset_keys), 1, figsize=(16, max(5, 4.2 * len(dataset_keys))), squeeze=False)
+
+    for row_idx, dataset_key in enumerate(dataset_keys):
+        ax = axes[row_idx, 0]
+        subset = summary_df[summary_df["dataset"] == dataset_key]
+        labels = []
+        x = []
+        bottoms = []
+        for algo in algo_keys:
+            for mode in modes:
+                row = subset[(subset["algorithm"] == algo) & (subset["mode"] == mode)]
+                if row.empty:
+                    continue
+                labels.append(f"{_display_algo_name(algo)}\n{mode}")
+                x.append(len(x))
+                bottoms.append(0.0)
+
+        x = np.array(x)
+        bottoms = np.zeros(len(labels))
+        for key in ("TP", "FP", "FN", "TN"):
+            values = []
+            for label in labels:
+                algo_label, mode_label = label.split("\n", 1)
+                algo_key = "simple" if algo_label == "JJ" else algo_label.lower()
+                row = subset[
+                    (subset["algorithm"] == algo_key) &
+                    (subset["mode"] == mode_label)
+                ]
+                values.append(float(row[key].iloc[0]) if not row.empty else 0.0)
+            ax.bar(x, values, bottom=bottoms, color=colors[key], edgecolor="white", label=key)
+            bottoms += np.asarray(values)
+
+        ax.set_title(f"{dataset_key.upper()} - confusion counts")
+        ax.set_ylabel("Mean arm count")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        ax.grid(axis="y", alpha=0.25)
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=4,
+               bbox_to_anchor=(0.5, -0.02))
+    fig.suptitle(
+        "Detection quality against classical positives\n"
+        "TP=true positive found, FP=false positive found, FN=classical positive missed, TN=correctly not found.",
+        fontsize=14, fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.06, 1, 0.93))
+    plt.savefig(output_dir / "confusion_counts.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir):
+    if summary_df.empty:
+        return
+    modes = [spec[1] for spec in MODE_SPECS]
+    ncols = min(2, max(1, len(dataset_keys)))
+    nrows = int(np.ceil(len(dataset_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
+    width = 0.18
+    offsets = np.linspace(-1.5 * width, 1.5 * width, len(modes))
+
+    flat_axes = axes.ravel()
+    for ax, dataset_key in zip(flat_axes, dataset_keys):
+        subset = summary_df[summary_df["dataset"] == dataset_key]
+        x = np.arange(len(algo_keys))
+        for offset, mode in zip(offsets, modes):
+            values = [
+                subset[(subset["algorithm"] == algo) & (subset["mode"] == mode)]["auc_discovery_curve"].mean()
+                for algo in algo_keys
+            ]
+            ax.bar(x + offset, values, width=width, label=mode)
+        ax.set_title(dataset_key.upper())
+        ax.set_xticks(x)
+        ax.set_xticklabels([_display_algo_name(algo) for algo in algo_keys], rotation=35, ha="right")
+        ax.set_ylabel("Normalized area under discovery curve")
+        ax.grid(axis="y", alpha=0.25)
+
+    for ax in flat_axes[len(dataset_keys):]:
+        ax.axis("off")
+
+    handles, labels = flat_axes[min(len(dataset_keys), len(flat_axes)) - 1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)),
+               bbox_to_anchor=(0.5, -0.03))
+    fig.suptitle(
+        "Discovery speed score by algorithm\n"
+        "A larger area means positives were found earlier and/or more completely during the horizon.",
+        fontsize=14, fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.08, 1, 0.90))
+    plt.savefig(output_dir / "discovery_speed_auc.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
 if __name__ == "__main__" and len(RUN_ALGOS) > 1:
     script_path = os.path.abspath(__file__)
     for algo_key in RUN_ALGOS:
         print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
         env = os.environ.copy()
         env["REAL_DATA_ALGO"] = algo_key
+        env["REAL_DATA_COMPARE_ALGOS"] = "0"
         env.pop("REAL_DATA_ALGOS", None)
         subprocess.run([sys.executable, script_path], cwd=os.path.dirname(script_path),
                        env=env, check=True)
+    if GENERATE_ALGO_COMPARISON:
+        generate_algorithm_comparison_figures(find_project_root(), RUN_ALGOS, RUN_DATASETS)
     sys.exit(0)
 
 RUN_ALGO = RUN_ALGOS[0]
@@ -231,6 +590,8 @@ if __name__ == "__main__":
     print(f"Active datasets: {', '.join(RUN_DATASETS)}")
     print(f"Output directory: {output_root}\n")
     print(f"History record every: {HISTORY_RECORD_EVERY} step(s)\n")
+    print(f"Use cache: {USE_EXPERIMENT_CACHE} | Save cache: {SAVE_EXPERIMENT_CACHE}\n")
+    print(f"Only comparison plots: {ONLY_COMPARISON_PLOTS}\n")
     plt.close('all')
     
     # Scenario: 2 good arms (0, 1) and 2 bad ones (2, 3)
@@ -587,18 +948,144 @@ if __name__ == "__main__":
 
         
         is_true_mean=False
-        # 1. Run Simulations
-        if type_de_loi=="normal":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-        elif type_de_loi=="bernouilli":
-            pnb_unif, _, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_unif_v, _, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_adapt, _, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-            pnb_adapt_v, _, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-        
+        experiment_cache_path = dataset_output_dir / CACHE_FILENAME
+        cached_payload = None
+        if USE_EXPERIMENT_CACHE and experiment_cache_path.exists():
+            try:
+                cached_payload = load_experiment_cache(experiment_cache_path)
+                cache_checks = {
+                    "algorithm": RUN_ALGO,
+                    "dataset": name_data,
+                    "type_de_loi": type_de_loi,
+                    "control_arm": control_arm,
+                    "n_arms": n_arms,
+                    "horizon": horizon,
+                }
+                mismatches = [
+                    key for key, expected in cache_checks.items()
+                    if cached_payload.get(key) != expected
+                ]
+                if mismatches:
+                    print(
+                        f"Cache metadata mismatch on {mismatches}; "
+                        f"ignoring {experiment_cache_path}."
+                    )
+                    cached_payload = None
+                else:
+                    print(f"Loaded cached run_experiment variables from {experiment_cache_path}")
+            except Exception as exc:
+                print(f"Could not load cache {experiment_cache_path}: {exc}. Re-running experiments.")
+
+        if cached_payload is not None:
+            pnb_unif = cached_payload["pnb_unif"]
+            pnb_unif_list = cached_payload.get("pnb_unif_list")
+            counts_unif_mean = cached_payload["counts_unif_mean"]
+            counts_unif_list = cached_payload["counts_unif_list"]
+            np_p_value_list_unif = cached_payload["np_p_value_list_unif"]
+            np_p_value_mean_unif = cached_payload["np_p_value_mean_unif"]
+            l_pos_unif = cached_payload["l_pos_unif"]
+            discovery_unif = cached_payload["discovery_unif"]
+
+            pnb_unif_v = cached_payload["pnb_unif_v"]
+            pnb_unif_v_list = cached_payload.get("pnb_unif_v_list")
+            counts_unif_v_mean = cached_payload["counts_unif_v_mean"]
+            counts_unif_v_list = cached_payload["counts_unif_v_list"]
+            np_p_value_list_unif_v = cached_payload["np_p_value_list_unif_v"]
+            np_p_value_mean_unif_v = cached_payload["np_p_value_mean_unif_v"]
+            l_pos_unif_v = cached_payload["l_pos_unif_v"]
+            discovery_unif_v = cached_payload["discovery_unif_v"]
+
+            pnb_adapt = cached_payload["pnb_adapt"]
+            pnb_adapt_list = cached_payload.get("pnb_adapt_list")
+            counts_adapt_mean = cached_payload["counts_adapt_mean"]
+            counts_adapt_list = cached_payload["counts_adapt_list"]
+            np_p_value_list_adapt = cached_payload["np_p_value_list_adapt"]
+            np_p_value_mean_adapt = cached_payload["np_p_value_mean_adapt"]
+            l_pos_adapt = cached_payload["l_pos_adapt"]
+            discovery_adapt = cached_payload["discovery_adapt"]
+
+            pnb_adapt_v = cached_payload["pnb_adapt_v"]
+            pnb_adapt_v_list = cached_payload.get("pnb_adapt_v_list")
+            counts_adapt_v_mean = cached_payload["counts_adapt_v_mean"]
+            counts_adapt_v_list = cached_payload["counts_adapt_v_list"]
+            np_p_value_list_adapt_v = cached_payload["np_p_value_list_adapt_v"]
+            np_p_value_mean_adapt_v = cached_payload["np_p_value_mean_adapt_v"]
+            l_pos_adapt_v = cached_payload["l_pos_adapt_v"]
+            discovery_adapt_v = cached_payload["discovery_adapt_v"]
+
+            cached_payload["true_positives"] = list(map(int, liste_vrai_positif))
+            if SAVE_EXPERIMENT_CACHE:
+                save_experiment_cache(experiment_cache_path, cached_payload)
+        else:
+            # 1. Run Simulations
+            if type_de_loi=="normal":
+                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+            elif type_de_loi=="bernouilli":
+                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+
+            cache_payload = {
+                "cache_version": CACHE_VERSION,
+                "algorithm": RUN_ALGO,
+                "dataset": name_data,
+                "type_de_loi": type_de_loi,
+                "control_arm": control_arm,
+                "n_arms": n_arms,
+                "horizon": horizon,
+                "n_sims": n_sims,
+                "init_nb": init_nb,
+                "init_choice": init_choice,
+                "history_record_every": HISTORY_RECORD_EVERY,
+                "mu_0_unif": mu_0_unif,
+                "true_positives": list(map(int, liste_vrai_positif)),
+                "arm_names": list(arm_test),
+                "pnb_unif": pnb_unif,
+                "pnb_unif_list": pnb_unif_list,
+                "counts_unif_mean": counts_unif_mean,
+                "counts_unif_list": counts_unif_list,
+                "np_p_value_list_unif": np_p_value_list_unif,
+                "np_p_value_mean_unif": np_p_value_mean_unif,
+                "l_pos_unif": l_pos_unif,
+                "discovery_unif": discovery_unif,
+                "pnb_unif_v": pnb_unif_v,
+                "pnb_unif_v_list": pnb_unif_v_list,
+                "counts_unif_v_mean": counts_unif_v_mean,
+                "counts_unif_v_list": counts_unif_v_list,
+                "np_p_value_list_unif_v": np_p_value_list_unif_v,
+                "np_p_value_mean_unif_v": np_p_value_mean_unif_v,
+                "l_pos_unif_v": l_pos_unif_v,
+                "discovery_unif_v": discovery_unif_v,
+                "pnb_adapt": pnb_adapt,
+                "pnb_adapt_list": pnb_adapt_list,
+                "counts_adapt_mean": counts_adapt_mean,
+                "counts_adapt_list": counts_adapt_list,
+                "np_p_value_list_adapt": np_p_value_list_adapt,
+                "np_p_value_mean_adapt": np_p_value_mean_adapt,
+                "l_pos_adapt": l_pos_adapt,
+                "discovery_adapt": discovery_adapt,
+                "pnb_adapt_v": pnb_adapt_v,
+                "pnb_adapt_v_list": pnb_adapt_v_list,
+                "counts_adapt_v_mean": counts_adapt_v_mean,
+                "counts_adapt_v_list": counts_adapt_v_list,
+                "np_p_value_list_adapt_v": np_p_value_list_adapt_v,
+                "np_p_value_mean_adapt_v": np_p_value_mean_adapt_v,
+                "l_pos_adapt_v": l_pos_adapt_v,
+                "discovery_adapt_v": discovery_adapt_v,
+            }
+            if SAVE_EXPERIMENT_CACHE:
+                save_experiment_cache(experiment_cache_path, cache_payload)
+                print(f"Saved run_experiment variables to {experiment_cache_path}")
+
+        if ONLY_COMPARISON_PLOTS:
+            print(f"Skipping classic per-dataset plots for {name_data}; comparison plots remain enabled.")
+            num_graph += 1
+            continue
+
 
         with open(dataset_output_dir / "resultats.txt", "w", encoding="utf-8") as f:
             f.write("List of the positive arm detected\n\n")
@@ -1233,3 +1720,6 @@ if __name__ == "__main__":
         # plt.show()
         num_graph+=1
         plt.close()
+
+    if GENERATE_ALGO_COMPARISON:
+        generate_algorithm_comparison_figures(git_root, list(ALGORITHM_CONFIGS.keys()), RUN_DATASETS)

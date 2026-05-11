@@ -50,6 +50,14 @@ ALGO_OPTIONS = {
     "Successive Rejects - NM": "adaptative_algorithm_successive_reject",
 }
 
+ALGO_COMPARISON_OPTIONS = {
+    "JJ": "adaptative_algorithm_jj",
+    "V2": "adaptative_algorithm_v2",
+    "V3": {"Normale": "adaptative_algorithm_continuous_v3",
+           "Binomiale": "adaptative_algorithm_binary_v3"},
+    "SR": "adaptative_algorithm_successive_reject",
+}
+
 LEGACY_ALGO_NAMES = {
     "Simple (original usable)": "Simple (original)",
     "Standard (original)": "Simple (original)",
@@ -260,6 +268,67 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
         'l_pos_unif':  l_pos_unif,
     }
 
+
+def _run_backend_on_prepared_data(cfg, algo_module, all_arm_data):
+    true_means = cfg['true_means']
+    n_sims = cfg['n_sims']
+    horizon = cfg['horizon']
+    delta = cfg['delta']
+    mu_0 = cfg['mu_0']
+    init_nb = cfg['init_nb']
+    control_arm = cfg['control_arm']
+    init_choice = cfg['init_choice']
+    variable_mu_choice = cfg.get('variable_mu_choice', False)
+
+    (tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif,
+     _, pvalues_unif_mean, l_pos_unif) = algo_module.run_experiment(
+        true_means, mu_0, delta, horizon, 'uniform',
+        all_arm_data, n_sims, control_arm, init_nb, init_choice,
+        variable_mu_choice, True,
+    )
+    (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
+     _, pvalues_adapt_mean, l_pos_adapt) = algo_module.run_experiment(
+        true_means, mu_0, delta, horizon, 'adaptive',
+        all_arm_data, n_sims, control_arm, init_nb, init_choice,
+        variable_mu_choice, True,
+    )
+
+    return {
+        'tpr_adapt': tpr_adapt,
+        'tpr_unif': tpr_unif,
+        'tpr_list_adapt': tpr_list_adapt,
+        'tpr_list_unif': tpr_list_unif,
+        'counts_adapt_mean': counts_adapt_mean,
+        'counts_unif_mean': counts_unif_mean,
+        'counts_list_adapt': counts_list_adapt,
+        'counts_list_unif': counts_list_unif,
+        'pvalues_adapt_mean': pvalues_adapt_mean,
+        'pvalues_unif_mean': pvalues_unif_mean,
+        'l_pos_adapt': l_pos_adapt,
+        'l_pos_unif': l_pos_unif,
+    }
+
+
+def run_algorithm_comparison(cfg, dist_type):
+    safe_horizon = cfg['horizon'] + cfg['init_nb'] * cfg['n_arms'] + SAFE_HORIZON_MARGIN
+    all_arm_data = prepare_experiment(
+        cfg['true_means'], safe_horizon, cfg['n_sims'], cfg['sigma'], dist_type
+    )
+    results = {}
+    errors = {}
+
+    for label, module_spec in ALGO_COMPARISON_OPTIONS.items():
+        module_name = module_spec[dist_type] if isinstance(module_spec, dict) else module_spec
+        try:
+            mod = importlib.import_module(f"backend.{module_name}")
+            if os.environ.get("DEV_MODE") == "1":
+                importlib.reload(mod)
+            results[label] = _run_backend_on_prepared_data(cfg, mod, all_arm_data)
+        except Exception as exc:
+            errors[label] = str(exc)
+
+    return {"results": results, "errors": errors}
+
 # =============================================================================
 # PART 3: FONCTIONS D'AFFICHAGE
 # =============================================================================
@@ -459,6 +528,8 @@ def compute_fdr_metrics(list_positive, true_means, mu_0,
                         variable_mu_choice=False, control_arm=None):
     """FDR/TPR réels — uniquement en simulation car H1 connu."""
     true_means = np.array(true_means)
+    if run_mode == "Comparaison des algorithmes":
+        st.info("Le bouton de lancement comparera JJ, V2, V3 et SR sur les mêmes données simulées.")
     if variable_mu_choice and control_arm is not None:
         test_arms = {i for i in range(len(true_means)) if i != int(control_arm)}
         ref = true_means[int(control_arm)]
@@ -482,6 +553,370 @@ def compute_fdr_metrics(list_positive, true_means, mu_0,
         "H0": H0,
         "last_St": list_positive[-1] if list_positive else set(),
     }
+
+
+def _hypothesis_sets(true_means, mu_0, variable_mu_choice=False, control_arm=None):
+    true_means = np.array(true_means)
+    if variable_mu_choice and control_arm is not None:
+        test_arms = {i for i in range(len(true_means)) if i != int(control_arm)}
+        ref = true_means[int(control_arm)]
+        h1 = {int(i) for i in test_arms if true_means[i] > ref}
+        h0 = test_arms - h1
+    else:
+        h1 = {int(i) for i in np.where(true_means > mu_0)[0]}
+        h0 = set(range(len(true_means))) - h1
+    return h1, h0
+
+
+def _per_sim_fdr_tpr(list_positive, true_means, mu_0,
+                     variable_mu_choice=False, control_arm=None):
+    h1, h0 = _hypothesis_sets(true_means, mu_0, variable_mu_choice, control_arm)
+    fdrs, tprs = [], []
+    for st_set in list_positive:
+        st_set = {int(i) for i in st_set}
+        tp = len(st_set & h1)
+        fp = len(st_set & h0)
+        fdrs.append(fp / max(len(st_set), 1))
+        tprs.append(tp / max(len(h1), 1))
+    return np.asarray(fdrs, dtype=float), np.asarray(tprs, dtype=float)
+
+
+def _per_sim_auc(tpr_list):
+    aucs = []
+    for curve in tpr_list:
+        y = np.asarray(curve, dtype=float)
+        if y.size == 0:
+            aucs.append(np.nan)
+        elif y.size == 1:
+            aucs.append(float(y[0]))
+        else:
+            aucs.append(float(np.sum((y[:-1] + y[1:]) * 0.5) / (y.size - 1)))
+    return np.asarray(aucs, dtype=float)
+
+
+def _per_sim_tpr90_time(tpr_list):
+    times = []
+    for curve in tpr_list:
+        y = np.asarray(curve, dtype=float)
+        if y.size == 0:
+            times.append(np.nan)
+        elif np.any(y >= 0.9):
+            times.append(float(np.argmax(y >= 0.9)))
+        else:
+            times.append(float(y.size))
+    return np.asarray(times, dtype=float)
+
+
+def _bootstrap_ci(values, n_boot=5000, alpha=0.05, rng_seed=12345):
+    values = np.asarray(values, dtype=float)
+    values = values[~np.isnan(values)]
+    if values.size == 0:
+        return {"mean": np.nan, "low": np.nan, "high": np.nan, "width": np.nan}
+    if values.size == 1:
+        val = float(values[0])
+        return {"mean": val, "low": val, "high": val, "width": 0.0}
+
+    rng = np.random.default_rng(rng_seed)
+    idx = rng.integers(0, values.size, size=(n_boot, values.size))
+    boot_means = values[idx].mean(axis=1)
+    low, high = np.quantile(boot_means, [alpha / 2, 1 - alpha / 2])
+    return {
+        "mean": float(values.mean()),
+        "low": float(low),
+        "high": float(high),
+        "width": float(high - low),
+    }
+
+
+def _fmt_ci(stat, digits=3, pct=False):
+    if np.isnan(stat["mean"]):
+        return "N/A"
+    scale = 100 if pct else 1
+    suffix = "%" if pct else ""
+    return (
+        f"{stat['mean'] * scale:.{digits}f}{suffix} "
+        f"[{stat['low'] * scale:.{digits}f}, {stat['high'] * scale:.{digits}f}]{suffix}"
+    )
+
+
+def compute_bootstrap_summary(result, true_means, mu_0,
+                              variable_mu_choice=False, control_arm=None):
+    fdr_adapt, tpr_adapt = _per_sim_fdr_tpr(
+        result["l_pos_adapt"], true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
+    fdr_unif, tpr_unif = _per_sim_fdr_tpr(
+        result["l_pos_unif"], true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
+    auc_adapt = _per_sim_auc(result["tpr_list_adapt"])
+    auc_unif = _per_sim_auc(result["tpr_list_unif"])
+    t90_adapt = _per_sim_tpr90_time(result["tpr_list_adapt"])
+    t90_unif = _per_sim_tpr90_time(result["tpr_list_unif"])
+
+    n = min(len(tpr_adapt), len(tpr_unif), len(fdr_adapt), len(fdr_unif),
+            len(auc_adapt), len(auc_unif), len(t90_adapt), len(t90_unif))
+    gain_tpr90_efficiency = np.where(
+        t90_unif[:n] > 0,
+        (t90_unif[:n] - t90_adapt[:n]) / t90_unif[:n],
+        0.0,
+    )
+    paired = {
+        "gain_tpr": tpr_adapt[:n] - tpr_unif[:n],
+        "gain_fdr": fdr_adapt[:n] - fdr_unif[:n],
+        "gain_auc": auc_adapt[:n] - auc_unif[:n],
+        "gain_tpr90_efficiency": gain_tpr90_efficiency,
+        "time_tpr90_adapt": t90_adapt[:n],
+        "time_tpr90_unif": t90_unif[:n],
+    }
+
+    return {
+        "n_sims": n,
+        "Adaptive TPR": _bootstrap_ci(tpr_adapt),
+        "Uniform TPR": _bootstrap_ci(tpr_unif),
+        "Adaptive FDR": _bootstrap_ci(fdr_adapt),
+        "Uniform FDR": _bootstrap_ci(fdr_unif),
+        "Adaptive speed AUC": _bootstrap_ci(auc_adapt),
+        "Uniform speed AUC": _bootstrap_ci(auc_unif),
+        "Adaptive time to TPR 90%": _bootstrap_ci(t90_adapt),
+        "Uniform time to TPR 90%": _bootstrap_ci(t90_unif),
+        "Gain TPR (Adapt - Uniform)": _bootstrap_ci(paired["gain_tpr"]),
+        "Gain FDR (Adapt - Uniform)": _bootstrap_ci(paired["gain_fdr"]),
+        "Gain speed AUC (Adapt - Uniform)": _bootstrap_ci(paired["gain_auc"]),
+        "Gain TPR90 efficiency": _bootstrap_ci(paired["gain_tpr90_efficiency"]),
+    }
+
+
+def plot_bootstrap_intervals(bootstrap_summary):
+    rows = [
+        ("Final TPR", "Adaptive TPR", "Uniform TPR"),
+        ("Final FDR", "Adaptive FDR", "Uniform FDR"),
+        ("Discovery speed AUC", "Adaptive speed AUC", "Uniform speed AUC"),
+        ("Time to TPR 90%", "Adaptive time to TPR 90%", "Uniform time to TPR 90%"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8.0))
+    axes = axes.ravel()
+    colors = {"Adaptive": "#ff7f0e", "Uniform": "#1f77b4"}
+
+    for ax, (title, adapt_key, unif_key) in zip(axes, rows):
+        for y, label, key in [(1, "Adaptive", adapt_key), (0, "Uniform", unif_key)]:
+            stat = bootstrap_summary[key]
+            mean, low, high = stat["mean"], stat["low"], stat["high"]
+            if np.isnan(mean):
+                continue
+            ax.errorbar(
+                mean, y,
+                xerr=[[mean - low], [high - mean]],
+                fmt="o",
+                color=colors[label],
+                ecolor=colors[label],
+                elinewidth=3,
+                capsize=6,
+                markersize=8,
+                label=label,
+            )
+            ax.text(high + 0.015, y, f"width={stat['width']:.3f}",
+                    va="center", fontsize=8, color="dimgray")
+        ax.set_title(title)
+        ax.set_yticks([0, 1])
+        ax.set_yticklabels(["Uniform", "Adaptive"])
+        if "Time" in title:
+            max_high = max(
+                bootstrap_summary[adapt_key]["high"],
+                bootstrap_summary[unif_key]["high"],
+            )
+            ax.set_xlim(0, max_high * 1.12 if max_high > 0 else 1)
+        else:
+            ax.set_xlim(-0.02, 1.05)
+        ax.grid(axis="x", alpha=0.3)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="lower center", ncol=2)
+    fig.suptitle(
+        "Bootstrap 95% confidence intervals across simulations\n"
+        "Shorter intervals mean more stable estimates; speed AUC is higher when discoveries happen earlier.",
+        fontsize=13,
+        fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.08, 1, 0.88))
+    return fig
+
+
+def _comparison_summary_rows(comparison_results, cfg):
+    rows = []
+    for algo_label, result in comparison_results.items():
+        for mode_label, pos_key, tpr_key, tpr_list_key in [
+            ("Adaptive", "l_pos_adapt", "tpr_adapt", "tpr_list_adapt"),
+            ("Uniform", "l_pos_unif", "tpr_unif", "tpr_list_unif"),
+        ]:
+            metrics = compute_fdr_metrics(
+                result[pos_key], cfg['true_means'], cfg['mu_0'],
+                variable_mu_choice=cfg.get('variable_mu_choice', False),
+                control_arm=cfg.get('control_arm', None),
+            )
+            auc = _bootstrap_ci(_per_sim_auc(result[tpr_list_key]))["mean"]
+            final_counts = [len(set(s)) for s in result[pos_key]]
+            rows.append({
+                "Algorithm": algo_label,
+                "Mode": mode_label,
+                "Final TPR": metrics["TPR_mean"],
+                "Final FDR": metrics["FDR_mean"],
+                "Mean discoveries": float(np.mean(final_counts)) if final_counts else 0.0,
+                "Speed AUC": auc,
+                "Final curve TPR": float(result[tpr_key][-1]) if len(result[tpr_key]) else np.nan,
+            })
+    return pd.DataFrame(rows)
+
+
+def plot_algo_comparison_tpr_curves(comparison_results, cfg):
+    fig, ax = plt.subplots(figsize=(11, 6))
+    colors = dict(zip(comparison_results.keys(), plt.cm.tab10.colors))
+    for algo_label, result in comparison_results.items():
+        for mode_label, key, linestyle, alpha in [
+            ("Adaptive", "tpr_adapt", "-", 0.90),
+            ("Uniform", "tpr_unif", "--", 0.62),
+        ]:
+            curve = np.asarray(result[key], dtype=float)
+            ax.plot(
+                np.arange(curve.size), curve,
+                label=f"{algo_label} - {mode_label}",
+                color=colors[algo_label],
+                linestyle=linestyle,
+                linewidth=2.2 if mode_label == "Adaptive" else 1.7,
+                alpha=alpha,
+            )
+    ax.axhline(1.0, color="gray", linestyle=":", alpha=0.6)
+    ax.set_title("Discovery trajectories across algorithms")
+    ax.set_xlabel("Round")
+    ax.set_ylabel("TPR")
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=2, fontsize="small")
+    return fig
+
+
+def plot_algo_comparison_found_counts(summary_df):
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    algos = list(summary_df["Algorithm"].unique())
+    x = np.arange(len(algos))
+    width = 0.35
+    for offset, mode in [(-width / 2, "Uniform"), (width / 2, "Adaptive")]:
+        vals = [
+            summary_df[(summary_df["Algorithm"] == algo) & (summary_df["Mode"] == mode)]["Mean discoveries"].mean()
+            for algo in algos
+        ]
+        ax.bar(x + offset, vals, width=width, label=mode)
+    ax.set_xticks(x)
+    ax.set_xticklabels(algos)
+    ax.set_ylabel("Mean number of discovered arms")
+    ax.set_title("Final discoveries by algorithm")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend()
+    return fig
+
+
+def plot_algo_comparison_confusion(comparison_results, cfg):
+    h1, h0 = _hypothesis_sets(
+        cfg['true_means'], cfg['mu_0'],
+        variable_mu_choice=cfg.get('variable_mu_choice', False),
+        control_arm=cfg.get('control_arm', None),
+    )
+    rows = []
+    for algo_label, result in comparison_results.items():
+        for mode_label, pos_key in [("Adaptive", "l_pos_adapt"), ("Uniform", "l_pos_unif")]:
+            vals = []
+            for st_set in result[pos_key]:
+                st_set = {int(i) for i in st_set}
+                vals.append({
+                    "TP": len(st_set & h1),
+                    "FP": len(st_set & h0),
+                    "FN": len(h1 - st_set),
+                    "TN": len(h0 - st_set),
+                })
+            mean_vals = {key: float(np.mean([v[key] for v in vals])) for key in ["TP", "FP", "FN", "TN"]}
+            rows.append({"Label": f"{algo_label}\n{mode_label}", **mean_vals})
+
+    df = pd.DataFrame(rows)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    x = np.arange(len(df))
+    bottom = np.zeros(len(df))
+    colors = {"TP": "#2ca02c", "FP": "#d62728", "FN": "#ffbf00", "TN": "#9ecae1"}
+    for key in ["TP", "FP", "FN", "TN"]:
+        vals = df[key].to_numpy()
+        ax.bar(x, vals, bottom=bottom, label=key, color=colors[key], edgecolor="white")
+        bottom += vals
+    ax.set_xticks(x)
+    ax.set_xticklabels(df["Label"], rotation=35, ha="right")
+    ax.set_ylabel("Mean arm count")
+    ax.set_title("Confusion counts against the known simulated positives")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(ncol=4)
+    return fig
+
+
+def plot_algo_comparison_speed(summary_df):
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    algos = list(summary_df["Algorithm"].unique())
+    x = np.arange(len(algos))
+    width = 0.35
+    for offset, mode in [(-width / 2, "Uniform"), (width / 2, "Adaptive")]:
+        vals = [
+            summary_df[(summary_df["Algorithm"] == algo) & (summary_df["Mode"] == mode)]["Speed AUC"].mean()
+            for algo in algos
+        ]
+        ax.bar(x + offset, vals, width=width, label=mode)
+    ax.set_xticks(x)
+    ax.set_xticklabels(algos)
+    ax.set_ylabel("Normalized TPR AUC")
+    ax.set_title("Discovery speed score by algorithm")
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend()
+    return fig
+
+
+def render_algorithm_comparison(comparison_payload, cfg):
+    results = comparison_payload["results"]
+    errors = comparison_payload.get("errors", {})
+    if errors:
+        for label, err in errors.items():
+            st.warning(f"{label} skipped: {err}")
+    if not results:
+        st.error("No algorithm comparison result is available.")
+        return
+
+    summary_df = _comparison_summary_rows(results, cfg)
+    st.subheader("Comparaison des algorithmes sur la configuration simulée")
+    st.caption("All algorithms use the same simulated rewards, so differences come from the sampling and testing strategy.")
+
+    metric_cols = st.columns(len(results))
+    for col, algo_label in zip(metric_cols, results.keys()):
+        sub = summary_df[(summary_df["Algorithm"] == algo_label) & (summary_df["Mode"] == "Adaptive")]
+        if sub.empty:
+            continue
+        col.metric(f"{algo_label} Adaptive TPR", f"{sub['Final TPR'].iloc[0]:.3f}")
+        col.metric(f"{algo_label} Adaptive FDR", f"{sub['Final FDR'].iloc[0]:.3f}")
+
+    tabs = st.tabs([
+        "Discovery curves",
+        "Found positives",
+        "Confusion counts",
+        "Discovery speed",
+        "Summary table",
+    ])
+    with tabs[0]:
+        st.pyplot(plot_algo_comparison_tpr_curves(results, cfg))
+        plt.close()
+    with tabs[1]:
+        st.pyplot(plot_algo_comparison_found_counts(summary_df))
+        plt.close()
+    with tabs[2]:
+        st.pyplot(plot_algo_comparison_confusion(results, cfg))
+        plt.close()
+    with tabs[3]:
+        st.pyplot(plot_algo_comparison_speed(summary_df))
+        plt.close()
+    with tabs[4]:
+        st.dataframe(summary_df, use_container_width=True)
 
 def render_result_tabs(result, cfg, tab_prefix=""):
     """Affiche tous les onglets de résultat pour un test donné.
@@ -525,11 +960,33 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         result['l_pos_unif'], true_means, mu_0,
         variable_mu_choice=variable_mu_choice, control_arm=control_arm,
     )
+    bootstrap_summary = compute_bootstrap_summary(
+        result, true_means, mu_0,
+        variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
 
 
     display_metrics(
         tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
         variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+    )
+    st.caption("Bootstrap 95% CI over simulations: mean [low, high]. Gains are paired simulation-by-simulation.")
+    ci_cols = st.columns(4)
+    ci_cols[0].metric(
+        "Gain TPR CI",
+        _fmt_ci(bootstrap_summary["Gain TPR (Adapt - Uniform)"], digits=1, pct=True),
+    )
+    ci_cols[1].metric(
+        "Gain FDR CI",
+        _fmt_ci(bootstrap_summary["Gain FDR (Adapt - Uniform)"], digits=1, pct=True),
+    )
+    ci_cols[2].metric(
+        "Gain speed AUC CI",
+        _fmt_ci(bootstrap_summary["Gain speed AUC (Adapt - Uniform)"], digits=3),
+    )
+    ci_cols[3].metric(
+        "Gain TPR90 time CI",
+        _fmt_ci(bootstrap_summary["Gain TPR90 efficiency"], digits=1, pct=True),
     )
     if variable_mu_choice:
         st.caption(
@@ -548,6 +1005,7 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         "Données brutes",
         "P-Values (combiné)",
         "P-Values (grille)",
+        "Bootstrap IC",
         "FDR — Découvertes",
     ])
 
@@ -648,6 +1106,29 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         st.info("Chaque ligne correspond à un bras. Les couleurs sont identiques entre Uniform et Adaptive.")
     
     with tabs[7]:
+        st.subheader("Bootstrap confidence intervals over simulations")
+        st.write(
+            "Each interval is computed by resampling simulations with replacement. "
+            "TPR and FDR use final discoveries; speed AUC summarizes the full TPR trajectory."
+        )
+        fig = plot_bootstrap_intervals(bootstrap_summary)
+        st.pyplot(fig)
+        plt.close(fig)
+
+        summary_table = pd.DataFrame([
+            {
+                "Metric": key,
+                "Mean": stat["mean"],
+                "CI low": stat["low"],
+                "CI high": stat["high"],
+                "CI width": stat["width"],
+            }
+            for key, stat in bootstrap_summary.items()
+            if key != "n_sims"
+        ])
+        st.dataframe(summary_table, use_container_width=True)
+
+    with tabs[8]:
         st.subheader("Analyse des découvertes (FDR contrôlé)")
         for label, l_pos in [("Adaptive", result['l_pos_adapt']),
                           ("Uniform",  result['l_pos_unif'])]:
@@ -688,6 +1169,8 @@ def init_state():
         "test_results": [],      # batch test results (list[dict])
         "single_result": None,   # latest single-simulation result (dict)
         "single_cfg": None,      # config of the latest single result
+        "algo_comparison_result": None,
+        "algo_comparison_cfg": None,
         "run_batch_requested": False,
     }
     for k, v in defaults.items():
@@ -707,10 +1190,20 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Paramètres de simulation")
 
+    run_mode = st.radio(
+        "Mode d'analyse",
+        ["Algorithme sélectionné", "Comparaison des algorithmes"],
+        help=(
+            "Le mode comparaison lance JJ, V2, V3 et Successive Rejects "
+            "sur les mêmes données simulées."
+        ),
+    )
+
     st.subheader("Algorithme backend")
     algo_choice = st.selectbox(
         "Version de l'algorithme",
         options=list(ALGO_OPTIONS.keys()),
+        disabled=(run_mode == "Comparaison des algorithmes"),
         help=(
             "Simple : algorithme original.\n"
             "Fusion V2 : module unique NM, utilisable en Normale et Binomiale.\n"
@@ -728,7 +1221,7 @@ with st.sidebar:
     if dist_type == "Binomiale":
         st.warning("⚠️ En mode Binomiale, les moyennes doivent être entre 0 et 1.")
 
-    n_sims = st.slider("Nombre de simulations", 10, 500, 50, 10)
+    n_sims = st.slider("Nombre de simulations", 10, 100000, 50, 10)
     horizon = st.slider("Horizon (T)", 100, 2000, 800, 50)
 
     if dist_type == "Normale":
@@ -810,6 +1303,15 @@ def current_cfg():
 
 if run_button:
     cfg = current_cfg()
+    if run_mode == "Comparaison des algorithmes":
+        with st.spinner("Comparaison des 4 algorithmes en cours..."):
+            comparison = run_algorithm_comparison(cfg, dist_type)
+        st.session_state.algo_comparison_result = comparison
+        st.session_state.algo_comparison_cfg = cfg
+        st.session_state.single_result = None
+        st.session_state.single_cfg = None
+        st.success("Comparaison des algorithmes terminée.")
+        st.rerun()
     validation_msg = validate_algo_distribution(cfg["algo_name"], dist_type)
     if validation_msg:
         st.warning(f"⚠️ {validation_msg}")
@@ -932,6 +1434,14 @@ if st.session_state.run_batch_requested and st.session_state.test_configs:
 
 st.markdown("---")
 
+# Algorithm comparison result
+if st.session_state.algo_comparison_result is not None:
+    st.header("Comparaison des algorithmes")
+    render_algorithm_comparison(
+        st.session_state.algo_comparison_result,
+        st.session_state.algo_comparison_cfg,
+    )
+
 # A) Latest single-simulation result
 if st.session_state.single_result is not None:
     st.header("📊 Dernière simulation")
@@ -1022,7 +1532,9 @@ with st.expander("🗄️ Historique local des simulations"):
 # PART 12: HOME SCREEN (if no result)
 # =============================================================================
 
-if st.session_state.single_result is None and not st.session_state.test_results:
+if (st.session_state.single_result is None
+        and st.session_state.algo_comparison_result is None
+        and not st.session_state.test_results):
     st.markdown("""
 ## Bienvenue sur le simulateur d'algorithmes de bandit !
 
