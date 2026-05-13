@@ -6,6 +6,7 @@ import subprocess
 import sys
 import pickle
 from pathlib import Path
+import hashlib
 
 import matplotlib.pyplot as plt
 from statistics import mean, variance
@@ -41,13 +42,12 @@ COMPARISON_DATASET_ORDER = ["effort", "exercise", "penn", "walmart"]
 #   REAL_DATA_COMPARE_ALGOS=0  -> disable figure_algo_compar generation
 #   REAL_DATA_ONLY_COMPARISON=1 -> skip per-dataset classic plots, keep comparison plots
 HISTORY_RECORD_EVERY = max(1, int(os.environ.get("REAL_DATA_HISTORY_RECORD_EVERY", "50")))
-USE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_USE_CACHE", "1").lower() in {"1", "true", "yes", "load"}
+USE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_USE_CACHE", "0").lower() in {"1", "true", "yes", "load"}
 SAVE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_SAVE_CACHE", "1").lower() not in {"0", "false", "no"}
 GENERATE_ALGO_COMPARISON = os.environ.get("REAL_DATA_COMPARE_ALGOS", "1").lower() not in {"0", "false", "no"}
-ONLY_COMPARISON_PLOTS = os.environ.get("REAL_DATA_ONLY_COMPARISON", "1").lower() in {"1", "true", "yes"}
+ONLY_COMPARISON_PLOTS = os.environ.get("REAL_DATA_ONLY_COMPARISON", "0").lower() in {"1", "true", "yes"}
 CACHE_FILENAME = "run_experiment_cache.pkl"
-CACHE_VERSION = 1
-
+CACHE_VERSION = 2
 ALGORITHM_CONFIGS = {
     "simple": {
         "continuous_module": "adaptative_algorithm_jj",
@@ -80,6 +80,112 @@ def parse_selection(raw_value, default_values, all_values):
     if selected == ["all"]:
         return list(all_values)
     return selected
+
+
+def _env_truthy(value):
+    return str(value).lower() in {"1", "true", "yes", "y", "load", "on"}
+
+
+def _env_falsey(value):
+    return str(value).lower() in {"0", "false", "no", "n", "off"}
+
+
+def _format_choice(values):
+    return ",".join(values)
+
+
+def _prompt_text(label, default_value, valid_values=None):
+    suffix = f" [{default_value}]"
+    raw = input(f"{label}{suffix}: ").strip()
+    value = raw if raw else default_value
+    if valid_values is None:
+        return value
+
+    selected = parse_selection(value, parse_selection(default_value, [], valid_values), valid_values)
+    invalid = [item for item in selected if item not in valid_values]
+    while invalid:
+        print(f"Invalid choice(s): {invalid}. Valid choices: {', '.join([*valid_values, 'all'])}")
+        raw = input(f"{label}{suffix}: ").strip()
+        value = raw if raw else default_value
+        selected = parse_selection(value, parse_selection(default_value, [], valid_values), valid_values)
+        invalid = [item for item in selected if item not in valid_values]
+    return _format_choice(selected)
+
+
+def _prompt_bool(label, default_value):
+    default_label = "y" if default_value else "n"
+    raw = input(f"{label} [y/n, default {default_label}]: ").strip().lower()
+    if raw == "":
+        return default_value
+    while raw not in {"y", "yes", "1", "true", "n", "no", "0", "false"}:
+        raw = input(f"{label} [y/n, default {default_label}]: ").strip().lower()
+        if raw == "":
+            return default_value
+    return raw in {"y", "yes", "1", "true"}
+
+
+def configure_from_interactive_input():
+    if __name__ != "__main__":
+        return
+    if os.environ.get("REAL_DATA_CHILD_RUN") == "1":
+        return
+    if _env_falsey(os.environ.get("REAL_DATA_INTERACTIVE", "1")):
+        return
+    if not sys.stdin.isatty():
+        return
+
+    print("\n=== Interactive real-data configuration ===")
+    print("Press Enter to keep the value shown in brackets.")
+    print("Available algorithms: simple, v2, v3, sr, all")
+    print("Available datasets: penn, exercise, effort, walmart, all")
+
+    default_algos = os.environ.get(
+        "REAL_DATA_ALGOS",
+        os.environ.get("REAL_DATA_ALGO", _format_choice(DEFAULT_RUN_ALGOS)),
+    )
+    default_datasets = os.environ.get(
+        "REAL_DATA_DATASETS",
+        os.environ.get("REAL_DATA_DATASET", _format_choice(DEFAULT_RUN_DATASETS)),
+    )
+    selected_algos = _prompt_text(
+        "Algorithms to run",
+        default_algos,
+        ALGORITHM_CONFIGS.keys(),
+    )
+    selected_datasets = _prompt_text(
+        "Datasets to run",
+        default_datasets,
+        DATASET_KEYS,
+    )
+    use_cache = _prompt_bool(
+        "Use existing run_experiment cache when available",
+        _env_truthy(os.environ.get("REAL_DATA_USE_CACHE", "0")),
+    )
+    save_cache = _prompt_bool(
+        "Save run_experiment cache",
+        not _env_falsey(os.environ.get("REAL_DATA_SAVE_CACHE", "1")),
+    )
+    generate_classic_plots = _prompt_bool(
+        "Generate all per-dataset figures",
+        not _env_truthy(os.environ.get("REAL_DATA_ONLY_COMPARISON", "0")),
+    )
+    generate_comparison = _prompt_bool(
+        "Generate algorithm comparison figures",
+        not _env_falsey(os.environ.get("REAL_DATA_COMPARE_ALGOS", "1")),
+    )
+
+    os.environ["REAL_DATA_ALGOS"] = selected_algos
+    os.environ.pop("REAL_DATA_ALGO", None)
+    os.environ["REAL_DATA_DATASETS"] = selected_datasets
+    os.environ.pop("REAL_DATA_DATASET", None)
+    os.environ["REAL_DATA_USE_CACHE"] = "1" if use_cache else "0"
+    os.environ["REAL_DATA_SAVE_CACHE"] = "1" if save_cache else "0"
+    os.environ["REAL_DATA_ONLY_COMPARISON"] = "0" if generate_classic_plots else "1"
+    os.environ["REAL_DATA_COMPARE_ALGOS"] = "1" if generate_comparison else "0"
+    print("===========================================\n")
+
+
+configure_from_interactive_input()
 
 
 RUN_ALGOS = parse_selection(
@@ -191,6 +297,217 @@ def _auc_score(curve, denominator):
     return area / (y.size - 1)
 
 
+def _format_arm_set(arms):
+    return "{" + ", ".join(str(int(arm)) for arm in sorted(arms)) + "}"
+
+
+def _format_delta_value(value):
+    if value is None or np.isnan(value):
+        return "NA"
+    if abs(value - round(value)) < 1e-9:
+        return f"{int(round(value)):+d}"
+    return f"{value:+.1f}"
+
+
+def _discovery_prefixes(discovery_dict):
+    if not discovery_dict:
+        return {}
+
+    cleaned_items = []
+    for arm_idx, first_time in discovery_dict.items():
+        try:
+            arm = int(arm_idx)
+            time = float(first_time)
+        except (TypeError, ValueError):
+            continue
+        cleaned_items.append((arm, time))
+
+    cleaned_items.sort(key=lambda item: (item[1], item[0]))
+    prefixes = {}
+    prefix_arms = []
+    prefix_time = 0.0
+    for arm, first_time in cleaned_items:
+        prefix_arms.append(arm)
+        prefix_time = max(prefix_time, first_time)
+        prefixes[len(prefix_arms)] = (tuple(sorted(prefix_arms)), prefix_time)
+    return prefixes
+
+
+def _compare_same_set_discovery(method_specs, left_col="mode_a", right_col="mode_b"):
+    rows = []
+    if len(method_specs) < 2:
+        return rows
+
+    prefix_cache = {}
+    for method_key, method_label, discovery_list in method_specs:
+        prefix_cache[method_key] = [
+            _discovery_prefixes(discovery_dict)
+            for discovery_dict in (discovery_list or [])
+        ]
+
+    for idx_a, (method_a, label_a, _) in enumerate(method_specs):
+        for idx_b in range(idx_a + 1, len(method_specs)):
+            method_b, label_b, _ = method_specs[idx_b]
+            prefixes_a = prefix_cache[method_a]
+            prefixes_b = prefix_cache[method_b]
+            n_sims = max(len(prefixes_a), len(prefixes_b))
+            pair_order = idx_a * len(method_specs) + idx_b
+
+            for sim_idx in range(n_sims):
+                sim_prefixes_a = prefixes_a[sim_idx] if sim_idx < len(prefixes_a) else {}
+                sim_prefixes_b = prefixes_b[sim_idx] if sim_idx < len(prefixes_b) else {}
+                for k in sorted(set(sim_prefixes_a) & set(sim_prefixes_b)):
+                    arms_a, time_a = sim_prefixes_a[k]
+                    arms_b, time_b = sim_prefixes_b[k]
+                    if arms_a != arms_b:
+                        continue
+                    rows.append({
+                        left_col: label_a,
+                        right_col: label_b,
+                        "simulation": sim_idx + 1,
+                        "k": int(k),
+                        "common_set": _format_arm_set(arms_a),
+                        "time_a": time_a,
+                        "time_b": time_b,
+                        "delta_b_minus_a": time_b - time_a,
+                        "pair_order": pair_order,
+                    })
+    return rows
+
+
+def _prepare_same_set_heatmap(rows_df, left_col, right_col):
+    if rows_df.empty:
+        return None
+
+    df = rows_df.copy()
+    df["pair_label"] = df[right_col].astype(str) + " - " + df[left_col].astype(str)
+    grouped = (
+        df.groupby(["pair_order", "pair_label", "k"], as_index=False)
+        .agg(
+            mean_delta=("delta_b_minus_a", "mean"),
+            match_count=("delta_b_minus_a", "size"),
+        )
+        .sort_values(["pair_order", "k"])
+    )
+    if grouped.empty:
+        return None
+
+    pair_order_df = (
+        grouped[["pair_order", "pair_label"]]
+        .drop_duplicates()
+        .sort_values("pair_order")
+    )
+    pair_labels = pair_order_df["pair_label"].tolist()
+    k_values = list(range(1, int(grouped["k"].max()) + 1))
+    matrix = np.full((len(pair_labels), len(k_values)), np.nan, dtype=float)
+    counts = np.zeros_like(matrix)
+    pair_index = {label: idx for idx, label in enumerate(pair_labels)}
+    k_index = {k: idx for idx, k in enumerate(k_values)}
+
+    for row in grouped.itertuples(index=False):
+        i = pair_index[row.pair_label]
+        j = k_index[int(row.k)]
+        matrix[i, j] = float(row.mean_delta)
+        counts[i, j] = int(row.match_count)
+
+    return {
+        "matrix": matrix,
+        "counts": counts,
+        "pair_labels": pair_labels,
+        "k_values": k_values,
+    }
+
+
+def _draw_same_set_heatmap(ax, prepared, title, max_abs=None, show_counts=False):
+    if prepared is None:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No identical discovered-set prefixes",
+                transform=ax.transAxes, ha="center", va="center",
+                color="gray", fontsize=10)
+        ax.set_title(title)
+        return None
+
+    matrix = prepared["matrix"]
+    pair_labels = prepared["pair_labels"]
+    k_values = prepared["k_values"]
+    counts = prepared["counts"]
+    local_max = np.nanmax(np.abs(matrix)) if np.isfinite(matrix).any() else 1.0
+    scale = max(float(max_abs or local_max), 1.0)
+    cmap = plt.cm.RdBu_r.copy()
+    cmap.set_bad(color="white")
+    masked = np.ma.masked_invalid(matrix)
+    image = ax.imshow(masked, aspect="auto", cmap=cmap, vmin=-scale, vmax=scale)
+
+    fontsize = 8 if matrix.shape[1] <= 20 else 6
+    for row_idx in range(matrix.shape[0]):
+        for col_idx in range(matrix.shape[1]):
+            value = matrix[row_idx, col_idx]
+            if np.isnan(value):
+                ax.text(col_idx, row_idx, "NA", ha="center", va="center",
+                        fontsize=fontsize, color="#b0b0b0")
+                continue
+            text = _format_delta_value(value)
+            if show_counts and counts[row_idx, col_idx] > 1:
+                text = f"{text}\nn={int(counts[row_idx, col_idx])}"
+            text_color = "white" if abs(value) > 0.55 * scale else "black"
+            ax.text(col_idx, row_idx, text, ha="center", va="center",
+                    fontsize=fontsize, color=text_color)
+
+    ax.set_title(title)
+    ax.set_xlabel("Discovered-set size k")
+    ax.set_ylabel("Comparison: method B - method A")
+    ax.set_xticks(np.arange(len(k_values)))
+    ax.set_xticklabels(k_values)
+    ax.set_yticks(np.arange(len(pair_labels)))
+    ax.set_yticklabels(pair_labels)
+    ax.set_facecolor("white")
+    ax.set_xticks(np.arange(-0.5, len(k_values), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(pair_labels), 1), minor=True)
+    ax.grid(which="minor", color="#d9d9d9", linestyle="-", linewidth=0.6)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    return image
+
+
+def write_same_set_discovery_comparison(method_specs, csv_path, figure_path, title):
+    rows = _compare_same_set_discovery(method_specs, "mode_a", "mode_b")
+    rows_df = pd.DataFrame(rows)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    export_columns = [
+        "mode_a", "mode_b", "simulation", "k", "common_set",
+        "time_a", "time_b", "delta_b_minus_a",
+    ]
+    if rows_df.empty:
+        pd.DataFrame(columns=export_columns).to_csv(csv_path, index=False)
+    else:
+        rows_df[export_columns].to_csv(csv_path, index=False)
+
+    prepared = _prepare_same_set_heatmap(rows_df, "mode_a", "mode_b")
+    max_abs = None
+    if prepared is not None and np.isfinite(prepared["matrix"]).any():
+        max_abs = max(float(np.nanmax(np.abs(prepared["matrix"]))), 1.0)
+
+    fig_width = 11
+    fig_height = 5
+    if prepared is not None:
+        fig_width = max(11, 0.48 * len(prepared["k_values"]) + 5)
+        fig_height = max(4.5, 0.55 * len(prepared["pair_labels"]) + 2.2)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    image = _draw_same_set_heatmap(ax, prepared, title, max_abs=max_abs, show_counts=True)
+    if image is not None:
+        cbar = fig.colorbar(image, ax=ax, shrink=0.88)
+        cbar.set_label("Mean time difference: method B - method A")
+    fig.suptitle(
+        "Same discovered-set discovery-time comparison\n"
+        "Cells are filled only when both methods have found exactly the same set of arms at size k.",
+        fontsize=12,
+        fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0, 1, 0.91))
+    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    return rows_df
+
+
 def _collect_cached_results(project_root, algo_keys, dataset_keys):
     cached = {}
     for algo_key in algo_keys:
@@ -249,6 +566,7 @@ def generate_algorithm_comparison_figures(project_root, algo_keys, dataset_keys)
     _plot_found_positive_counts(summary_df, algo_keys, dataset_keys, output_dir)
     _plot_confusion_counts(summary_df, algo_keys, dataset_keys, output_dir)
     _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir)
+    _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, output_dir)
     print(f"[comparison] wrote algorithm comparison figures to {output_dir}")
 
 
@@ -449,12 +767,101 @@ def _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir):
     plt.savefig(output_dir / "discovery_speed_auc.png", dpi=300, bbox_inches="tight")
     plt.close()
 
+
+def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, output_dir):
+    all_rows = []
+    dataset_keys = _ordered_comparison_datasets(dataset_keys)
+
+    for dataset_key in dataset_keys:
+        for _, mode_label, _, _, discovery_key, _ in MODE_SPECS:
+            method_specs = []
+            for algo_key in algo_keys:
+                payload = cached.get((algo_key, dataset_key))
+                if not payload:
+                    continue
+                method_specs.append((
+                    algo_key,
+                    _display_algo_name(algo_key),
+                    payload.get(discovery_key, []),
+                ))
+
+            mode_rows = _compare_same_set_discovery(
+                method_specs,
+                left_col="algo_a",
+                right_col="algo_b",
+            )
+            for row in mode_rows:
+                row["dataset"] = dataset_key
+                row["mode"] = mode_label
+                all_rows.append(row)
+
+    export_columns = [
+        "dataset", "mode", "algo_a", "algo_b", "simulation", "k",
+        "common_set", "time_a", "time_b", "delta_b_minus_a",
+    ]
+    if not all_rows:
+        pd.DataFrame(columns=export_columns).to_csv(
+            output_dir / "same_set_discovery_comparison.csv", index=False
+        )
+        return
+
+    all_rows_df = pd.DataFrame(all_rows)
+    all_rows_df[export_columns].to_csv(
+        output_dir / "same_set_discovery_comparison.csv", index=False
+    )
+
+    for dataset_key in dataset_keys:
+        dataset_df = all_rows_df[all_rows_df["dataset"] == dataset_key].copy()
+        fig, axes = plt.subplots(2, 2, figsize=(18, 10), squeeze=False)
+        flat_axes = axes.ravel()
+        prepared_by_mode = []
+        max_abs = 1.0
+
+        for _, mode_label, _, _, _, _ in MODE_SPECS:
+            mode_df = dataset_df[dataset_df["mode"] == mode_label].copy()
+            prepared = _prepare_same_set_heatmap(mode_df, "algo_a", "algo_b")
+            prepared_by_mode.append((mode_label, prepared))
+            if prepared is not None and np.isfinite(prepared["matrix"]).any():
+                max_abs = max(max_abs, float(np.nanmax(np.abs(prepared["matrix"]))))
+
+        last_image = None
+        for ax, (mode_label, prepared) in zip(flat_axes, prepared_by_mode):
+            image = _draw_same_set_heatmap(
+                ax,
+                prepared,
+                mode_label,
+                max_abs=max_abs,
+                show_counts=False,
+            )
+            if image is not None:
+                last_image = image
+
+        if last_image is not None:
+            cbar = fig.colorbar(last_image, ax=flat_axes.tolist(), shrink=0.82)
+            cbar.set_label("Mean time difference: algorithm B - algorithm A")
+
+        fig.suptitle(
+            f"{dataset_key.upper()} - same discovered-set timing across algorithms\n"
+            "A filled cell means both algorithms found the exact same set at size k; negative means algorithm B was faster.",
+            fontsize=14,
+            fontweight="bold",
+        )
+        plt.tight_layout(rect=(0, 0, 1, 0.92))
+        plt.savefig(
+            output_dir / f"same_set_discovery_heatmap_{dataset_key}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+
 if __name__ == "__main__" and len(RUN_ALGOS) > 1:
     script_path = os.path.abspath(__file__)
     for algo_key in RUN_ALGOS:
         print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
         env = os.environ.copy()
         env["REAL_DATA_ALGO"] = algo_key
+        env["REAL_DATA_CHILD_RUN"] = "1"
         env["REAL_DATA_COMPARE_ALGOS"] = "0"
         env.pop("REAL_DATA_ALGOS", None)
         subprocess.run([sys.executable, script_path], cwd=os.path.dirname(script_path),
@@ -503,17 +910,46 @@ df_walmart0 = pd.read_csv(path_walmart).rename(columns={'participant_id': 'id'})
 print("Fichiers chargés avec succès !")
 
 # Filtrage des colonnes utiles
-df_effort = df_effort0[['id', 'y', 'arm']]
-df_exercise = df_exercise0[['id', 'y', 'arm']]
-df_penn = df_penn0[['id', 'y', 'arm']]
-df_walmart = df_walmart0[['id', 'y', 'arm']]
+def sort_by_participant_id(df):
+    if 'id' not in df.columns:
+        return df.reset_index(drop=True)
+    return df.sort_values('id', kind='mergesort').reset_index(drop=True)
+
+
+def sort_by_fixed_hash_within_arm(df, seed):
+    """
+    Deterministic pseudo-random order for reconstructed aggregate binary data.
+    This avoids the artificial 111...000... order while remaining identical
+    across runs and machines.
+    """
+    if 'id' not in df.columns or 'arm' not in df.columns:
+        return df.reset_index(drop=True)
+
+    ordered = df.copy()
+
+    def stable_key(row):
+        raw = f"{seed}|{row['arm']}|{row['id']}".encode("utf-8")
+        return int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big")
+
+    ordered["_fixed_order_key"] = ordered.apply(stable_key, axis=1)
+    ordered = ordered.sort_values(
+        ["arm", "_fixed_order_key"],
+        kind="mergesort",
+    ).drop(columns="_fixed_order_key")
+    return ordered.reset_index(drop=True)
+
+
+df_effort = sort_by_participant_id(df_effort0[['id', 'y', 'arm']])
+df_exercise = sort_by_participant_id(df_exercise0[['id', 'y', 'arm']])
+df_penn = sort_by_fixed_hash_within_arm(df_penn0[['id', 'y', 'arm']], seed="penn-fixed-v1")
+df_walmart = sort_by_fixed_hash_within_arm(df_walmart0[['id', 'y', 'arm']], seed="walmart-fixed-v1")
 
 # --- 2. NEW PREPARATION FUNCTION ---
 
 def prepare_real_experiment(df, n_sims):
     """
     Transforme un DataFrame en structure 3D pour la simulation.
-    Structure : [simulation_index][arm_index][shuffled_observations]
+    Structure : [simulation_index][arm_index][observations_in_original_order]
     
     Returns:
         all_arm_data_by_sim: La structure de données (list of list of list)
@@ -535,12 +971,8 @@ def prepare_real_experiment(df, n_sims):
         
         # For each arm
         for arm_name in arm_names:
-            # Copy the original data
+            # Copy the original data while preserving its source order.
             rewards = grouped[arm_name].copy()
-            
-            # SHUFFLE: randomly permute reward order
-            # This simulates a different arrival order for patients/participants in each simulation
-            np.random.shuffle(rewards)
             
             all_arm_data.append(rewards)
             
@@ -985,6 +1417,7 @@ if __name__ == "__main__":
             np_p_value_mean_unif = cached_payload["np_p_value_mean_unif"]
             l_pos_unif = cached_payload["l_pos_unif"]
             discovery_unif = cached_payload["discovery_unif"]
+            bootstrap_unif = cached_payload["bootstrap_unif"]
 
             pnb_unif_v = cached_payload["pnb_unif_v"]
             pnb_unif_v_list = cached_payload.get("pnb_unif_v_list")
@@ -994,6 +1427,7 @@ if __name__ == "__main__":
             np_p_value_mean_unif_v = cached_payload["np_p_value_mean_unif_v"]
             l_pos_unif_v = cached_payload["l_pos_unif_v"]
             discovery_unif_v = cached_payload["discovery_unif_v"]
+            bootstrap_unif_v = cached_payload["bootstrap_unif_v"]
 
             pnb_adapt = cached_payload["pnb_adapt"]
             pnb_adapt_list = cached_payload.get("pnb_adapt_list")
@@ -1003,6 +1437,7 @@ if __name__ == "__main__":
             np_p_value_mean_adapt = cached_payload["np_p_value_mean_adapt"]
             l_pos_adapt = cached_payload["l_pos_adapt"]
             discovery_adapt = cached_payload["discovery_adapt"]
+            bootstrap_adapt = cached_payload["bootstrap_adapt"]
 
             pnb_adapt_v = cached_payload["pnb_adapt_v"]
             pnb_adapt_v_list = cached_payload.get("pnb_adapt_v_list")
@@ -1012,6 +1447,7 @@ if __name__ == "__main__":
             np_p_value_mean_adapt_v = cached_payload["np_p_value_mean_adapt_v"]
             l_pos_adapt_v = cached_payload["l_pos_adapt_v"]
             discovery_adapt_v = cached_payload["discovery_adapt_v"]
+            bootstrap_adapt_v = cached_payload["bootstrap_adapt_v"]
 
             cached_payload["true_positives"] = list(map(int, liste_vrai_positif))
             if SAVE_EXPERIMENT_CACHE:
@@ -1019,15 +1455,15 @@ if __name__ == "__main__":
         else:
             # 1. Run Simulations
             if type_de_loi=="normal":
-                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
             elif type_de_loi=="bernouilli":
-                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
-                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
+                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY)
 
             cache_payload = {
                 "cache_version": CACHE_VERSION,
@@ -1052,6 +1488,7 @@ if __name__ == "__main__":
                 "np_p_value_mean_unif": np_p_value_mean_unif,
                 "l_pos_unif": l_pos_unif,
                 "discovery_unif": discovery_unif,
+                "bootstrap_unif": bootstrap_unif,
                 "pnb_unif_v": pnb_unif_v,
                 "pnb_unif_v_list": pnb_unif_v_list,
                 "counts_unif_v_mean": counts_unif_v_mean,
@@ -1060,6 +1497,7 @@ if __name__ == "__main__":
                 "np_p_value_mean_unif_v": np_p_value_mean_unif_v,
                 "l_pos_unif_v": l_pos_unif_v,
                 "discovery_unif_v": discovery_unif_v,
+                "bootstrap_unif_v": bootstrap_unif_v,
                 "pnb_adapt": pnb_adapt,
                 "pnb_adapt_list": pnb_adapt_list,
                 "counts_adapt_mean": counts_adapt_mean,
@@ -1068,6 +1506,7 @@ if __name__ == "__main__":
                 "np_p_value_mean_adapt": np_p_value_mean_adapt,
                 "l_pos_adapt": l_pos_adapt,
                 "discovery_adapt": discovery_adapt,
+                "bootstrap_adapt": bootstrap_adapt,
                 "pnb_adapt_v": pnb_adapt_v,
                 "pnb_adapt_v_list": pnb_adapt_v_list,
                 "counts_adapt_v_mean": counts_adapt_v_mean,
@@ -1076,10 +1515,24 @@ if __name__ == "__main__":
                 "np_p_value_mean_adapt_v": np_p_value_mean_adapt_v,
                 "l_pos_adapt_v": l_pos_adapt_v,
                 "discovery_adapt_v": discovery_adapt_v,
+                "bootstrap_adapt_v": bootstrap_adapt_v,
             }
             if SAVE_EXPERIMENT_CACHE:
                 save_experiment_cache(experiment_cache_path, cache_payload)
                 print(f"Saved run_experiment variables to {experiment_cache_path}")
+
+        same_set_method_specs = [
+            ("UNIF", "UNIF", discovery_unif),
+            ("ADAPT", "ADAPT", discovery_adapt),
+            ("UNIF VAR", "UNIF VAR", discovery_unif_v),
+            ("ADAPT VAR", "ADAPT VAR", discovery_adapt_v),
+        ]
+        write_same_set_discovery_comparison(
+            same_set_method_specs,
+            dataset_output_dir / "same_set_discovery_comparison.csv",
+            dataset_output_dir / "figure9_same_set_discovery_heatmap.png",
+            f"{_display_algo_name(RUN_ALGO)} on {name_data}",
+        )
 
         if ONLY_COMPARISON_PLOTS:
             print(f"Skipping classic per-dataset plots for {name_data}; comparison plots remain enabled.")
@@ -1113,6 +1566,20 @@ if __name__ == "__main__":
                 f.write(f"   {mode_name}\n")
                 for sim_idx, discovery_dict in enumerate(discovery_list, 1):
                     ordered = dict(sorted(discovery_dict.items()))
+                    f.write(f"{sim_idx}. {ordered}\n")
+
+        with open(dataset_output_dir / "bootstrap_times.txt", "w", encoding="utf-8") as f:
+            f.write("First replacement-draw time by simulation and arm\n\n")
+            f.write("A listed arm has exhausted its original observations and is now sampled with replacement.\n\n")
+            for mode_name, bootstrap_list in [
+                ("UNIF", bootstrap_unif),
+                ("UNIF VAR", bootstrap_unif_v),
+                ("ADAPT", bootstrap_adapt),
+                ("ADAPT VAR", bootstrap_adapt_v),
+            ]:
+                f.write(f"   {mode_name}\n")
+                for sim_idx, bootstrap_dict in enumerate(bootstrap_list, 1):
+                    ordered = dict(sorted(bootstrap_dict.items()))
                     f.write(f"{sim_idx}. {ordered}\n")
 
         print("pos unif:", l_pos_unif)
@@ -1399,6 +1866,67 @@ if __name__ == "__main__":
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.savefig(dataset_output_dir / "figure1.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # --- PLOT 8: discovery speed with replacement-draw starts ---
+        def _flatten_bootstrap_times(bootstrap_list):
+            times = []
+            arms = []
+            for bootstrap_dict in bootstrap_list or []:
+                for arm_idx, first_time in bootstrap_dict.items():
+                    times.append(int(first_time))
+                    arms.append(int(arm_idx))
+            return np.asarray(times, dtype=float), np.asarray(arms, dtype=int)
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        figure8_specs = [
+            ("Adaptive", pnb_adapt, bootstrap_adapt, classic_color, "-", 0),
+            ("Uniform", pnb_unif, bootstrap_unif, classic_color, "--", 1),
+            ("Adaptive Var", pnb_adapt_v, bootstrap_adapt_v, var_color, "-", 2),
+            ("Uniform Var", pnb_unif_v, bootstrap_unif_v, var_color, "--", 3),
+        ]
+        max_curve = 1.0
+        for _, curve, _, _, _, _ in figure8_specs:
+            curve_arr = np.asarray(curve, dtype=float)
+            if curve_arr.size:
+                max_curve = max(max_curve, float(np.nanmax(curve_arr)))
+
+        rug_step = max_curve * 0.08
+        rug_levels = [-(idx + 1) * rug_step for idx in range(len(figure8_specs))]
+
+        for label, curve, bootstrap_list, color, linestyle, rug_idx in figure8_specs:
+            curve_arr = np.asarray(curve, dtype=float)
+            x_curve = np.arange(1, curve_arr.size + 1)
+            ax.plot(x_curve, curve_arr, label=label, color=color,
+                    linestyle=linestyle, linewidth=2, alpha=0.78)
+
+            times, _ = _flatten_bootstrap_times(bootstrap_list)
+            if times.size:
+                y_values = np.full(times.shape, rug_levels[rug_idx], dtype=float)
+                ax.scatter(times, y_values, color=color, marker="|", s=180,
+                           alpha=0.48, linewidths=1.4, label="_nolegend_")
+                ax.text(0, rug_levels[rug_idx], f"{label} replacement starts",
+                        va="center", ha="left", fontsize=8, color=color, alpha=0.9)
+
+        ax.axhline(y=0, color="gray", linestyle=":", linewidth=1)
+        ax.axhline(y=1.0, color="gray", linestyle=":", linewidth=1)
+        ax.set_xlabel("Round")
+        ax.set_ylabel("Detected positives")
+        ax.set_title(
+            "Discovery speed and first replacement draws\n"
+            "Rug marks show when each arm first exhausts original data and starts sampling with replacement"
+        )
+        ax.set_ylim(min(rug_levels) - rug_step, max_curve * 1.08)
+        ax.set_xlim(0, max(1, horizon))
+        ax.grid(True, alpha=0.3)
+        handles, labels = ax.get_legend_handles_labels()
+        handles.append(plt.Line2D([0], [0], color="black", marker="|",
+                                  linestyle="None", markersize=12,
+                                  label="First replacement draw per arm"))
+        labels.append("First replacement draw per arm")
+        ax.legend(handles, labels, loc="upper left")
+        plt.tight_layout()
+        plt.savefig(dataset_output_dir / "figure8.png", dpi=300, bbox_inches="tight")
         plt.close()
 
 

@@ -1,8 +1,0 @@
-List of the positive arm detected
-
-   UNIF
-1. set()
-   ADAPT
-1. set()
-   ADAPT VAR
-1. set()

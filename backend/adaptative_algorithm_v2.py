@@ -443,6 +443,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     p_values_list = []
     all_arm_counts = [0 for _ in range(n_arms)]
     run_pr = []
+    bootstrap_start_times = {}
     history_record_every = max(1, int(history_record_every))
 
     # --- Init ---
@@ -495,16 +496,17 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             break
 
         else:
+            current_step = len(run_pr) + 1
             # Sequential data access for fair comparison
             len_arm = len(all_arm_data[no_sim][arm])
             if all_arm_counts[arm] >= len_arm:
+                bootstrap_start_times.setdefault(int(arm), current_step)
                 observation = np.random.choice(all_arm_data[no_sim][arm]) 
             else:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
 
             all_arm_counts[arm] += 1
 
-            current_step = len(run_pr) + 1
             p_values_t = algo.bh_update_optimized(arm, observation)
             if _should_record_history(current_step, horizon, history_record_every):
                 p_values_list.append(p_values_t)
@@ -522,13 +524,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 nb_found = len(algo.S_t)
                 run_pr.append(nb_found)
 
-    return run_pr, p_values_list, discovery_times
+    return run_pr, p_values_list, discovery_times, bootstrap_start_times
 
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
                    rho=0.01, cs_type='normal_mixture', return_discovery_times=False,
-                   history_record_every=1):
+                   return_bootstrap_times=False, history_record_every=1):
     """
     Runs the bandit experiment.
 
@@ -584,6 +586,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
     p_values_list_by_sim = []
     list_positive = []
     discovery_times_list = []
+    bootstrap_times_list = []
     n_history_points = 1 + sum(
         1 for step in range(1, horizon + 1)
         if _should_record_history(step, horizon, history_record_every)
@@ -609,7 +612,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
         algo = algo_factory[mode]()
 
-        run_pr, p_values_list, discovery_times = _run_single_simulation(
+        run_pr, p_values_list, discovery_times, bootstrap_start_times = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice,
             n_arms, is_true_mean, true_positives, history_record_every
@@ -625,6 +628,7 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         counts_evolution_sum += counts_arr
         p_values_list_by_sim.append(p_values_list)
         discovery_times_list.append(discovery_times)
+        bootstrap_times_list.append(bootstrap_start_times)
 
     # --- Aggregation ---
     pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
@@ -641,6 +645,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
 
     result = (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
               np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    if return_discovery_times and return_bootstrap_times:
+        return (*result, discovery_times_list, bootstrap_times_list)
     if return_discovery_times:
         return (*result, discovery_times_list)
+    if return_bootstrap_times:
+        return (*result, bootstrap_times_list)
     return result
