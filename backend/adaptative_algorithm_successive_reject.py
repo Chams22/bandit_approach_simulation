@@ -44,9 +44,11 @@ def _two_sample_nm_lcb_discoveries(algo, k_start, delta_denominator):
     control_var = algo.emp_vars[control_idx]
     for k in range(k_start, 0, -1):
         effective_delta = algo.delta * k / delta_denominator
-        phi_ctrl = algo.phi(control_count, effective_delta, control_var)
+        # Union bound: split the level across the arm and control CIs.
+        half_delta = effective_delta / 2.0
+        phi_ctrl = algo.phi(control_count, half_delta, control_var)
         scores = (gaps
-                  - _phi_vector(algo, treatment_counts, effective_delta, treatment_vars)
+                  - _phi_vector(algo, treatment_counts, half_delta, treatment_vars)
                   - phi_ctrl)
         passing_idx = treatment_idx[scores >= 0]
         if passing_idx.size >= k:

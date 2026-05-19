@@ -33,7 +33,7 @@ def _phi_vector(algo, counts, delta_val, var_stats):
 
 
 def _two_sample_nm_lcb_discoveries(algo, k_start, delta_denominator,
-                                   phi_delta_factor=1.0):
+                                   phi_delta_factor=0.5):
     control_idx = algo.control_arm_idx
     treatment_idx = np.flatnonzero(np.arange(algo.n) != control_idx)
     if treatment_idx.size == 0:
@@ -47,6 +47,7 @@ def _two_sample_nm_lcb_discoveries(algo, k_start, delta_denominator,
 
     for k in range(k_start, 0, -1):
         effective_delta = algo.delta * k / delta_denominator
+        # Union bound: split the level across the arm and control CIs.
         phi_delta = effective_delta * phi_delta_factor
         phi_ctrl = algo.phi(control_count, phi_delta, control_var)
         scores = gaps - _phi_vector(algo, treatment_counts, phi_delta,

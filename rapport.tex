@@ -1,0 +1,1949 @@
+\documentclass[10.5pt,a4paper]{article}
+
+% =========================================================
+%  PACKAGES
+% =========================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{mathptmx}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[a4paper, top=2cm, bottom=2cm, left=1.6cm, right=1.6cm]{geometry}
+\usepackage{setspace}
+\setstretch{1.12}
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.4em}
+
+% --- Palette noir et blanc (impression) ---
+\usepackage[table]{xcolor}
+\definecolor{lightgray}{RGB}{245, 245, 245}  % fond code
+\definecolor{medgray}{RGB}{150, 150, 150}    % elements discrets
+\definecolor{darkblue}{RGB}{0, 51, 102}
+
+% --- En-tetes et pieds de page ---
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancyhead[L]{\small\textit{Algorithmes de Bandits Adaptatifs pour les Mega-etudes}}
+\fancyhead[R]{\small Bahraoui, Bouaziz, Daoudi --- 2025-2026}
+\fancyfoot[C]{\small\thepage}
+
+% --- Titres de sections ---
+\usepackage{titlesec}
+\titleformat{\section}
+  {\large\bfseries}{\thesection.}{0.6em}{}
+  [\vspace{-0.3em}\rule{\linewidth}{0.6pt}]
+\titleformat{\subsection}
+  {\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}
+  {\normalsize\itshape\bfseries}{\thesubsubsection.}{0.5em}{}
+\titlespacing{\section}{0pt}{1.4em}{0.5em}
+\titlespacing{\subsection}{0pt}{0.9em}{0.3em}
+\titlespacing{\subsubsection}{0pt}{0.6em}{0.2em}
+
+% --- Table des matieres ---
+\usepackage{tocloft}
+\renewcommand{\cftsecfont}{\bfseries}
+\renewcommand{\cftsecpagefont}{\bfseries}
+\renewcommand{\cftsubsecfont}{\small}
+\setlength{\cftbeforesecskip}{0.4em}
+\setlength{\cftbeforesubsecskip}{0.1em}
+
+% --- Math ---
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{subcaption}
+
+% =========================================================
+%  ENVIRONNEMENTS TCOLORBOX (noir et blanc)
+% =========================================================
+\usepackage[most]{tcolorbox}
+
+% Principe de distinction B&W :
+%   definition  -> barre titre noire (100%)         + fond blanc
+%   theorem     -> barre titre gris tres fonce (80%) + fond blanc
+%   proposition -> barre titre gris fonce (65%)      + fond blanc
+%   intuition   -> fond gris tres clair (6%)         + bordure gauche epaisse (noire)
+%   keyidea     -> fond gris clair (12%)             + bordure complete fine (noire)
+%   pratique    -> fond gris tres clair (5%)         + bordure complete fine (gris)
+%   warningbox  -> fond gris (15%)                   + bordure gauche tres epaisse
+
+\tcbset{
+  defstyle/.style={
+    enhanced,
+    colback=white, colframe=black,
+    fonttitle=\small\bfseries\color{white},
+    colbacktitle=black,
+    boxrule=0.5pt,
+    left=7pt, right=7pt, top=4pt, bottom=5pt, arc=0pt,
+    toptitle=1pt, bottomtitle=1pt
+  },
+  thmstyle/.style={
+    enhanced,
+    colback=white, colframe=black!75,
+    fonttitle=\small\bfseries\color{white},
+    colbacktitle=black!75,
+    boxrule=0.5pt,
+    left=7pt, right=7pt, top=4pt, bottom=5pt, arc=0pt,
+    toptitle=1pt, bottomtitle=1pt
+  },
+  propstyle/.style={
+    enhanced,
+    colback=white, colframe=black!60,
+    fonttitle=\small\bfseries\color{white},
+    colbacktitle=black!60,
+    boxrule=0.5pt,
+    left=7pt, right=7pt, top=4pt, bottom=5pt, arc=0pt,
+    toptitle=1pt, bottomtitle=1pt
+  },
+  remarkstyle/.style={
+    enhanced,
+    colback=white, colframe=black!45,
+    fonttitle=\small\bfseries,
+    boxrule=0.4pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt, arc=0pt
+  }
+}
+\newtcbtheorem[number within=section]{definition}{D\'efinition}{defstyle}{def}
+\newtcbtheorem[number within=section]{theorem}{Th\'eor\`eme}{thmstyle}{thm}
+\newtcbtheorem[number within=section]{proposition}{Proposition}{propstyle}{prop}
+\newtcbtheorem[number within=section]{remark}{Remarque}{remarkstyle}{rem}
+\newtcbtheorem[number within=section]{lemma}{Lemme}{thmstyle}{lem}
+\newtcbtheorem[number within=section]{corollary}{Corollaire}{propstyle}{cor}
+
+% -- Intuition : fond tres clair + filet gauche epais --
+\newtcolorbox{intuition}[1][Intuition]{
+  enhanced,
+  colback=black!5, colframe=black,
+  fonttitle=\small\bfseries\color{white},
+  colbacktitle=black!55,
+  title={\textit{#1}},
+  boxrule=0pt, leftrule=3pt,
+  left=8pt, right=8pt, top=3pt, bottom=4pt, arc=0pt,
+  toptitle=1pt, bottomtitle=1pt
+}
+
+% -- Point cle : fond gris + bordure noire complete --
+\newtcolorbox{keyidea}[1][Point cl\'e]{
+  enhanced,
+  colback=black!8, colframe=black,
+  fonttitle=\small\bfseries\color{white},
+  colbacktitle=black,
+  title={#1},
+  boxrule=0.5pt,
+  left=7pt, right=7pt, top=4pt, bottom=4pt, arc=0pt,
+  toptitle=1pt, bottomtitle=1pt
+}
+
+% -- Note pratique : fond gris tres clair + bordure grise fine --
+\newtcolorbox{pratique}[1][Note pratique]{
+  enhanced,
+  colback=black!5, colframe=black!50,
+  fonttitle=\small\bfseries\color{white},
+  colbacktitle=black!50,
+  title={#1},
+  boxrule=0.5pt,
+  left=7pt, right=7pt, top=4pt, bottom=4pt, arc=0pt,
+  toptitle=1pt, bottomtitle=1pt
+}
+
+% -- Avertissement : fond gris clair + filet gauche tres epais --
+\newtcolorbox{warningbox}[1][Condition importante]{
+  enhanced,
+  colback=black!6, colframe=black,
+  fonttitle=\small\bfseries\color{white},
+  colbacktitle=black,
+  title={\textbf{#1}},
+  boxrule=0pt, leftrule=4pt,
+  left=8pt, right=8pt, top=3pt, bottom=4pt, arc=0pt,
+  toptitle=1pt, bottomtitle=1pt
+}
+
+% --- Figures et tableaux ---
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+\captionsetup{font=small, labelfont=bf, format=plain, margin=0.5cm}
+
+% --- Algorithmes ---
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\renewcommand{\algorithmicrequire}{\textbf{Entr\'ee :}}
+\renewcommand{\algorithmicensure}{\textbf{Sortie :}}
+\floatname{algorithm}{Algorithme}
+
+% --- Listings de code (noir et blanc) ---
+\usepackage{listings}
+\lstdefinestyle{pythonstyle}{
+  language=Python, basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\bfseries,           % mots-cles en gras
+  commentstyle=\itshape,            % commentaires en italique
+  stringstyle=\ttfamily,            % chaines normales
+  numbers=left, numberstyle=\tiny\color{medgray},
+  stepnumber=1, numbersep=8pt,
+  backgroundcolor=\color{lightgray},
+  frame=single, rulecolor=\color{medgray},
+  tabsize=4, captionpos=b, breaklines=true,
+  showstringspaces=false,
+  xleftmargin=1.5em, framexleftmargin=1.5em
+}
+\lstset{style=pythonstyle}
+
+% --- Hyperliens (noirs a l'impression) ---
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=false,
+  pdfborder={0 0 0},
+  pdftitle={Algorithmes de Bandits Adaptatifs pour les Mega-etudes},
+  pdfauthor={Ines Bahraoui, Chams Eddine Bouaziz, Marouane Daoudi}
+}
+
+% --- Bibliographie ---
+\usepackage[numbers,sort&compress]{natbib}
+
+% --- Listes ---
+\usepackage{enumitem}
+\setlist[itemize]{itemsep=0.2em, topsep=0.3em}
+\setlist[enumerate]{itemsep=0.2em, topsep=0.3em}
+
+% =========================================================
+%  CUSTOM MATH COMMANDS
+% =========================================================
+\newcommand{\FDR}{\mathrm{FDR}}
+\newcommand{\FWER}{\mathrm{FWER}}
+\newcommand{\FDP}{\mathrm{FDP}}
+\newcommand{\TPR}{\mathrm{TPR}}
+\newcommand{\FWPD}{\mathrm{FWPD}}
+\newcommand{\calN}{\mathcal{N}}
+\newcommand{\calO}{\mathcal{O}}
+\newcommand{\calA}{\mathcal{A}}
+\newcommand{\calS}{\mathcal{S}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\muhat}{\hat{\mu}}
+\newcommand{\sigsq}{\sigma^2}
+\newcommand{\Hnull}{H_0}
+\newcommand{\Halt}{H_1}
+\newcommand{\phil}{\phi_{\mathrm{LIL}}}
+\newcommand{\phinm}{\phi_{\mathrm{NM}}}
+
+% =========================================================
+%  DOCUMENT
+% =========================================================
+\begin{document}
+
+% ===================== TITLE (arXiv style) =====================
+\begin{titlepage}
+\begin{center}
+
+% --- Logos ---
+\includegraphics[width=0.18\textwidth]{logofac.png}\hfill
+\includegraphics[width=0.18\textwidth]{logomaster.png}
+
+\vspace{0.8cm}
+{\large\bfseries UNIVERSITE DE MONTPELLIER}\\[0.15cm]
+{\small Faculte des Sciences --- Master Statistique et Science des Donnees}
+
+\vspace{0.4cm}
+{\color{darkblue}\rule{\textwidth}{1.2pt}}
+\vspace{0.4cm}
+
+% --- Title ---
+{\fontsize{22}{28}\selectfont\bfseries\color{darkblue}
+  Algorithmes de Bandits Adaptatifs\\[0.3cm]pour les Mega-études
+}\\[0.5cm]
+{\large Implementation, Simulation et Application Empirique}
+
+\vspace{0.3cm}
+{\color{darkblue}\rule{\textwidth}{0.6pt}}
+\vspace{1cm}
+
+% --- Subtitle ---
+{\large\bfseries Projet de Recherche}
+
+\vspace{1.5cm}
+
+% --- Authors (Students) ---
+\begin{center}
+{\small\itshape Étudiants :}\\[0.6em]
+{\large
+  Ines \textsc{Bahraoui} \quad
+  Chams-Eddine \textsc{Bouaziz} \quad
+  Marouane \textsc{Daoudi}
+}\\[0.5em]
+{\small\ttfamily
+  \href{mailto:ines.bahraoui@etu.umontpellier.fr}{ines.bahraoui@etu.umontpellier.fr}
+  \quad
+  \href{mailto:chams-eddine.bouaziz@etu.umontpellier.fr}{chams-eddine.bouaziz@etu.umontpellier.fr}
+  \quad
+  \href{mailto:marouane.daoudi@etu.umontpellier.fr}{marouane.daoudi@etu.umontpellier.fr}
+}\\[2cm]
+
+% --- Supervisors ---
+{\small\itshape Équipe encadrante :}\\[0.6em]
+{\large Adrien \textsc{Nguyen-Huu}} {\small (Enseignant-Chercheur)} ---
+\href{mailto:adrien.nguyen-huu@umontpellier.fr}{\texttt{adrien.nguyen-huu@umontpellier.fr}}\\[0.4em]
+
+{\large Luka \textsc{Boisgibault}} {\small (Doctorant)} ---
+\href{mailto:luka.boisgibault@hotmail.com}{\texttt{luka.boisgibault@hotmail.com}}
+
+\end{center}
+
+{\color{darkblue}\rule{\textwidth}{0.6pt}}\\[0.3cm]
+{\large Annee Universitaire 2025--2026}
+\end{center}
+\end{titlepage}
+% ===================== ABSTRACT =====================
+\begin{abstract}
+\noindent
+% Ecrire le resume ici (150-250 mots).
+\end{abstract}
+
+\vspace{0.5em}
+{\color{darkblue}\rule{\textwidth}{0.5pt}}
+\vspace{0.5em}
+
+% ===================== TABLE OF CONTENTS =====================
+\tableofcontents
+\newpage
+
+% =========================================================
+\section{Introduction}
+% =========================================================
+
+Le cadre classique de Neyman--Pearson formalise le test statistique comme
+un arbitrage entre deux risques : l'erreur de type I, qui consiste à rejeter
+à tort une hypothèse nulle, et l'erreur de type II, qui consiste à ne pas
+détecter un effet réel. Cette approche suppose généralement un protocole
+fixé à l'avance : la taille d'échantillon est déterminée avant l'expérience,
+les données sont collectées, puis les tests sont effectués une seule fois.
+Or, dans de nombreuses expériences modernes, notamment les tests A/B, les
+essais adaptatifs et les méga-études comportementales, les données arrivent
+progressivement et les décisions peuvent être prises en cours d'expérience.
+Regarder les résultats de manière répétée avec des p-values classiques
+invalide alors le contrôle de l'erreur : c'est le problème du monitoring
+séquentiel.
+
+L'analyse séquentielle moderne généralise ce cadre en introduisant des
+outils d'inférence \emph{always-valid}, c'est-à-dire valables à tout instant.
+Dans l'esprit des travaux sur l'inférence toujours valide, notamment
+l'article SAVE/SAVI sur le monitoring continu des tests A/B, une p-value
+anytime reste correcte même si l'expérimentateur observe les résultats
+plusieurs fois et décide d'arrêter l'expérience de façon adaptative.
+Cette propriété est centrale : elle permet de combiner apprentissage
+séquentiel, arrêt anticipé et contrôle statistique sans tomber dans le
+p-hacking.
+
+Dans ce contexte, Jamieson et Jain (JJ) proposent une contribution
+nouvelle : reformuler le problème des tests multiples comme un problème
+de bandits multi-bras avec contrôle du taux de fausses découvertes. Leur
+algorithme ne se contente pas de tester uniformément tous les traitements ;
+il alloue adaptativement les observations vers les bras les plus prometteurs
+ou les plus incertains, tout en appliquant une procédure de
+Benjamini--Hochberg à des p-values anytime. La nouveauté de JJ est donc de
+lier trois éléments habituellement séparés : exploration adaptative,
+tests multiples et validité séquentielle des p-values.
+
+L'objectif de ce travail est d'étudier ce cadre dans une perspective
+appliquée. Nous implémentons l'algorithme de Jamieson et Jain, comparons
+plusieurs séquences de confiance et variantes de p-values anytime, puis
+évaluons leurs performances par simulation en termes de puissance, de
+vitesse de détection et de contrôle du FDR. Enfin, nous cherchons à appliquer
+cette méthodologie à des méga-études réelles issues de données
+comportementales et de vaccination, afin de déterminer dans quelle mesure
+l'approche adaptative de JJ peut réduire le coût expérimental tout en
+préservant des garanties statistiques fiables.
+
+
+% =========================================================
+\section{Cadre Th\'eorique}
+\label{sec:cadre}
+% =========================================================
+
+% ---------------------------------------------------------
+\subsection{Contextualisation du probl\`eme}
+% ---------------------------------------------------------
+
+On se place dans le cadre d'un \textbf{bandit multi-bras} : $n$ traitements
+sont index\'es par $i \in [n] = \{1,\ldots,n\}$, chacun
+associ\'e \`a une distribution $\nu_i$ de moyenne $\mu_i$ inconnue.
+\`A chaque instant $t$, l'agent choisit un traitement $i_t$, observe une
+r\'ecompense $X_{i_t,t} \sim \nu_i$ ind\'ependante du pass\'e, et met \`a
+jour ses statistiques. Selon les donn\'ees, $\nu_i$ estorn une loi de
+Bernoulli (donn\'ees binaires : taux de succ\`es, de conversion) ou une
+loi sub-gaussienne (donn\'ees continues : mesures quantitatives).
+
+L'objectif n'est pas de maximiser les gains, mais d'identifier aussi
+rapidement que possible les traitements \emph{significativement efficaces},
+tout en ma\^itrisant le risque de fausse d\'ecouverte. Pour chaque
+traitement $i$, on formule un test unilat\'eral contre un seuil $\mu_0$
+estim\'e \`a partir du bras contr\^ole~:
+
+\vspace{0.5em}
+\begin{center}
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{@{}llll@{}}
+\toprule
+ & \textbf{Hypoth\`ese} & \textbf{Formulation} & \textbf{Interpr\'etation} \\
+\midrule
+$H_0^{(i)}$ & nulle      & $\mu_i \leq \mu_0$ & le traitement $i$ n'est pas sup\'erieur au contr\^ole \\
+$H_1^{(i)}$ & alternative & $\mu_i > \mu_0$   & le traitement $i$ est significativement efficace \\
+\bottomrule
+\end{tabular}
+\end{center}
+\vspace{0.3em}
+
+\noindent o\`u $\mu_0$ est la moyenne du bras contr\^ole, estim\'ee
+lors de la phase d'initialisation et fix\'ee pour toute la dur\'ee
+de l'algorithme.
+
+L'algorithme produit un ensemble de d\'ecouvertes
+$S_t \subseteq [n]$ croissant au fil du temps. On note $\Halt$ l'ensemble
+des traitements r\'eellement sup\'erieurs ($H_1^{(i)}$ vraie), $\Hnull$ le compl\'ementaire,
+et $\Delta = \min_{i \in \Halt}(\mu_i - \mu_0)$ la plus petite s\'eparation
+pertinente.
+
+% ---------------------------------------------------------
+\subsection{Crit\`eres d'erreur et de puissance}
+% ---------------------------------------------------------
+
+Tester simultan\'ement $n$ traitements pose un probl\`eme fondamental :
+m\^eme si chaque test individuel est valid\'e au niveau $\delta$, le nombre
+d'erreurs commises quelque part cro\^it avec $n$. Si l'on applique
+na\"\i vement un seuil $\delta$ \`a chacun des $n$ tests, le risque global
+d'erreur devient approximativement $n\delta$, ce qui est inacceptable d\`es
+que $n$ est grand. Deux crit\`eres compl\'ementaires permettent de
+formaliser ce qu'on cherche \`a garantir.
+
+\begin{definition}{FDR et TPR --- Benjamini \& Hochberg~\cite{benjamini1995}}{errtypes}
+Soient $\delta \in\,]0,1[$, $S_t$ l'ensemble des d\'ecouvertes \`a
+l'instant $t$, $\Halt$ l'ensemble des bras r\'eellement efficaces
+($H_1^{(i)}$ vraie) et $\Hnull$ son compl\'ementaire.
+
+\medskip
+\textbf{Taux de fausses d\'ecouvertes (FDR).}
+On appelle fausse d\'ecouverte un bras d\'eclar\'e efficace alors
+qu'il ne l'est pas ($S_t \cap \Hnull$). Le FDR est la proportion
+esp\'er\'ee de telles erreurs parmi toutes les d\'ecouvertes~:
+\[
+  \mathrm{FDR}(t) \;=\;
+  \E\!\left[\frac{|S_t \cap \Hnull|}{|S_t|\vee 1}\right] \;\leq\; \delta
+  \quad \forall\,t.
+\]
+Le denominateur $|S_t| \vee 1 = \max(|S_t|, 1)$ \'evite la division par
+z\'ero lorsqu'aucune d\'ecouverte n'a \'et\'e faite. Contr\^oler le FDR
+au niveau $\delta = 0{,}05$ signifie qu'en esp\'erance, au plus $5\,\%$
+des traitements d\'eclar\'es efficaces sont de fausses alarmes. Contrairement
+\`a une approche qui exigerait z\'ero erreur, le FDR tol\`ere un petit
+nombre de faux positifs, ce qui est raisonnable en pratique et pr\'eserve
+la puissance de d\'etection lorsque $n$ est grand.
+
+\medskip
+\textbf{Taux de vrais positifs (TPR).}
+Le TPR mesure la capacit\'e de l'algorithme \`a ne pas manquer les
+traitements r\'eellement efficaces~: c'est la proportion de vrais
+positifs effectivement d\'etect\'es,
+\[
+  \mathrm{TPR}(t) \;=\;
+  \E\!\left[\frac{|S_t \cap \Halt|}{|\Halt|}\right] \;\geq\; 1-\delta
+  \quad \forall\,t \geq \tau.
+\]
+On vise TPR-$\delta$ apr\`es un horizon $\tau$~: pass\'e ce temps,
+l'algorithme doit avoir d\'etect\'e au moins une fraction $1-\delta$ des
+bras vraiment efficaces. Un TPR faible signifie que beaucoup de bons
+traitements sont ignor\'es, c'est le co\^ut d'une proc\'edure trop
+conservative.
+\end{definition}
+
+\begin{keyidea}[Le compromis FDR / TPR]
+Ces deux crit\`eres sont naturellement antagonistes. Abaisser le seuil
+de d\'ecision r\'eduit les fausses alarmes (FDR $\downarrow$) mais
+augmente les omissions (TPR $\downarrow$), et r\'eciproquement.
+L'objectif de l'algorithme est de contr\^oler strictement le FDR tout
+en maximisant le TPR, ce qui correspond \`a trouver le plus grand nombre
+de traitements efficaces sans d\'epasser le taux d'erreur autoris\'e.
+C'est le cadre formel de Jamieson \& Jain~\cite{jamieson2019}.
+\end{keyidea}
+
+% ---------------------------------------------------------
+\subsection{S\'equences de confiance : pourquoi et comment}
+% ---------------------------------------------------------
+
+\begin{intuition}[Pourquoi pas un intervalle de confiance classique ?]
+Un intervalle de confiance classique est valide pour un horizon $T$
+\emph{fix\'e \`a l'avance} : si l'on d\'ecide de regarder les donn\'ees
+une seule fois au temps $T$, la couverture $1-\delta$ est garantie.
+Mais dans notre cadre, l'algorithme consulte les donn\'ees \`a \emph{chaque}
+instant et peut prendre une d\'ecision \`a tout moment. R\'eutiliser le
+m\^eme test $\delta$ \`a chaque pas gonfle artificiellement le risque :
+c'est le probl\`eme du \emph{p-hacking} s\'equentiel.
+
+La solution est d'utiliser une \textbf{s\'equence de confiance} : un
+intervalle $[\muhat_i^t \pm \phi_t]$ valide \emph{simultan\'ement pour
+tout $t \geq 1$} avec probabilit\'e $1-\delta$, sans inflation du risque.
+\end{intuition}
+
+Jamieson \& Jain ne sp\'ecifient pas de CS particulier~: ils posent
+l'existence d'un $\phi(t,\delta)$ g\'en\'erique v\'erifiant
+$\mathbb{P}(\forall t : |\hat{\mu}_{i,t} - \mu_i| \leq \phi(t,\delta)) \geq 1-\delta$
+et recommandent explicitement d'utiliser en pratique des bornes plus fines
+tenant compte de la variance empirique. Dans leurs exp\'eriences, ils
+emploient la borne de Howard et al.~\cite{howard2021}, Théorème~3 :
+\[
+  \phil(t, \delta) = \sqrt{\frac{2\bigl(\log(1/\delta)
+    + 6\log\log(1/\delta) + 3\log\log(et/2)\bigr)}{t}},
+\]
+qui ne suppose pas $\sigsq$ connu. Substituer na\"\i vement
+$\hat{\sigma}^2$ dans une borne sous-gaussienne simple invaliderait la
+preuve th\'eorique. Nous utilisons donc deux familles de s\'equences de
+confiance qui r\'esolvent ce probl\`eme, pr\'esent\'ees ci-dessous.
+
+% ---------------------------------------------------------
+\subsubsection{Normal Mixture Confidence Sequence (NM)}
+% ---------------------------------------------------------
+
+\begin{definition}{Normal Mixture CS --- Howard et al.~\cite{howard2021}, Corollaire~1}{nmcs}
+Soit $\hat{V}_t$ la variance cumul\'ee des observations (d\'etaill\'ee
+ci-dessous) et $\rho > 0$ un param\`etre de r\'eglage. La
+\textbf{Normal Mixture Confidence Sequence} est :
+\[
+  \boxed{
+  \phinm(t,\,\delta,\,\hat{V}_t,\,\rho)
+  \;=\;
+  \frac{1}{t}\sqrt{2\,(\hat{V}_t+\rho)\,
+    \log\!\left(\frac{\sqrt{(\hat{V}_t+\rho)/\rho}}{\delta}\right)}
+  }
+\]
+Pour tout bras $i$ et tout $\delta \in (0,1)$, cet intervalle est
+valide simultan\'ement pour tout $t \geq 1$ :
+\[
+  \Prob\!\Bigl(\forall\, t \geq 1 :
+    \bigl|\muhat_i^t - \mu_i\bigr| < \phinm(t,\delta,\hat{V}_t,\rho)
+  \Bigr) \geq 1 - \delta.
+\]
+\end{definition}
+
+\paragraph{Accumulateur de variance $\hat{V}_t$.}
+La quantit\'e $\hat{V}_t$ mesure la dispersion cumul\'ee des observations,
+mise \`a jour incr\'ementalement \`a chaque nouveau tirage~:
+\[
+  \hat{V}_t = \hat{V}_{t-1} + (X_t - \bar{X}_{t-1})^2.
+\]
+C'est l'accumulateur pour lequel la borne $\phinm$ est formellement
+garantie~\cite{howard2021}.
+
+\paragraph{P-value anytime en forme ferm\'ee.}
+L'inversion analytique de $\phinm = \bar{X}_t - \mu_0$ donne directement
+une p-value valide sans m\'ethode num\'erique. En posant
+$d = \bar{X}_t - \mu_0 > 0$ :
+\[
+  p_t^{\mathrm{NM}}
+  = \sqrt{\frac{\hat{V}_t + \rho}{\rho}}\;
+    \exp\!\left(-\frac{d^2\cdot t^2}{2\,(\hat{V}_t+\rho)}\right).
+\]
+La p-value s'obtient en inversant $\phinm(t,p) = d$ en $p$.
+La m\'ethode de Brent r\'esout cette \'equation en au plus
+$\bigl\lceil \log_2\!\bigl((b-a)/\varepsilon\bigr) \bigr\rceil$
+\'evaluations de $\phinm$, o\`u $[a,b]=[10^{-12},\,1-10^{-4}]$
+est l'intervalle de recherche et $\varepsilon = 2\times10^{-12}$
+la tol\'erance de \texttt{brentq}~; cela donne au plus
+$\lceil \log_2(5\times 10^{11}) \rceil = 39$
+\'evaluations par bras. La forme ferm\'ee \'evalue $p_t^{\mathrm{NM}}$
+directement en une seule op\'eration arithm\'etique, r\'eduisant
+le co\^ut d'un facteur~39 par bras.
+
+\begin{pratique}[Auto-calibration de $\rho$]
+\textbf{Rôle de $\rho$.}
+Dans la formule de $\phinm$, le terme $(\hat{V}_t + \rho)$ empêche
+l'intervalle de s'effondrer à zéro aux premiers instants ($t$ petit,
+$\hat{V}_t \approx 0$). En pratique, $\rho$ contrôle la largeur initiale
+de l'intervalle~: trop petit, il laisse passer des fausses découvertes
+précoces~; trop grand, il ralentit la détection. La borne est valide pour
+\emph{tout} $\rho > 0$ fixé~\cite{howard2021}, mais elle est la plus
+serrée lorsque $\rho$ est proche de la variance réelle $\sigma^2$ des
+observations.
+
+\textbf{Pourquoi estimer $\rho$ avec la médiane des variances empiriques ?}
+La variance non biaisée de chaque bras $i$ est estimée sur les
+$n_i$ observations d'initialisation~:
+\[
+  \hat{\sigma}_i^2 \;=\; \frac{\hat{V}_{n_i}}{n_i - 1},
+  \quad n_i \geq 2.
+\]
+On pose alors
+\[
+  \hat{\rho} \;=\; \mathrm{median}_{i\,:\,n_i \geq 2}\!\bigl(\hat{\sigma}_i^2\bigr).
+\]
+La \textbf{médiane} (plutôt que la moyenne) est choisie pour sa robustesse
+aux bras ayant très peu d'observations ou une variance atypiquement
+élevée, qui gonfleraient la moyenne sans refléter le comportement typique
+des données.
+
+\textbf{Validité de la garantie.}
+$\hat{\rho}$ est calculé \emph{une seule fois}, à partir des données
+d'initialisation collectées avant le démarrage du processus adaptatif,
+puis figé pour toute la suite. $\rho$ est donc une constante
+indépendante des décisions futures de l'algorithme, ce qui préserve
+intégralement la garantie anytime de $\phinm$.
+\end{pratique}
+
+% ---------------------------------------------------------
+\subsubsection{S\'equence de confiance par martingale de pari}
+% ---------------------------------------------------------
+
+\begin{intuition}[Principe du pari s\'equentiel]
+Imaginez un joueur qui parie sur l'issue de tirages successifs. S'il
+pense que la moyenne d'un bras est sup\'erieure \`a $\mu_0$, il mise
+\emph{dans ce sens} \`a chaque observation. Si l'hypoth\`ese nulle est
+vraie, ses gains restent born\'es en esp\'erance~; si elle est fausse,
+sa richesse cro\^it exponentiellement. L'in\'egalit\'e de Ville garantit
+qu'une richesse \'elev\'ee est une preuve statistiquement valide contre
+$H_0$, \`a tout instant, sans param\`etre de r\'eglage.
+\end{intuition}
+
+\begin{definition}{Martingale de pari et p-value anytime~\cite{waudbysmith2021}}{betting}
+On initialise $M_0 = 1$. \`A chaque pas $t$, le parieur choisit une
+mise $\lambda_t \geq 0$ (calcul\'ee sur les observations pass\'ees), puis
+observe $X_t$~; la richesse est mise \`a jour de fa\c{c}on multiplicative.
+Par l'in\'egalit\'e de Ville~\cite{ville1939}, $M_t$ est une
+sur-martingale sous $H_0$ :
+\[
+  \Prob\!\bigl(\exists\, t \geq 1 : M_t \geq 1/\alpha\bigr) \leq \alpha,
+  \qquad \text{d'o\`u} \qquad
+  p_t^{\mathrm{bet}} \;=\; \frac{1}{M_t} \;=\; e^{-\log M_t}.
+\]
+La richesse $M_t$ cro\^it d'autant plus vite que $H_0$ est fausse~;
+la p-value d\'ecro\^it en cons\'equence.
+\end{definition}
+
+\begin{warningbox}[Condition de pr\'edictabilit\'e --- \`a ne pas violer]
+La validit\'e de la martingale exige que la mise $\lambda_t$ soit
+\textbf{$\mathcal{F}_{t-1}$-mesurable} : elle ne peut d\'ependre que des
+observations \emph{ant\'erieures} \`a $t$. En pratique, $\lambda_t$ est
+calcul\'e \`a partir de la moyenne empirique $\bar{X}_{t-1}$ et de la
+variance accumul\'ee $\hat{\sigma}_{t-1}^2$, tous deux connus avant
+d'observer $X_t$.
+\end{warningbox}
+
+\paragraph{Pari Bernoulli (donn\'ees binaires, $X_t \in \{0,1\}$).}
+Le pari adaptatif de Kelly~\cite{waudbysmith2021} maximise le taux de
+croissance de $M_t$ sous $H_1$ :
+\[
+  \lambda_t = \frac{\bar{X}_{t-1} - \mu_0}{\bar{X}_{t-1}(1-\bar{X}_{t-1})},
+  \qquad
+  M_t = M_{t-1}\cdot\bigl(1 + \lambda_t (X_t - \mu_0)\bigr).
+\]
+\paragraph{Pari sous-gaussien (donn\'ees continues).}
+Pour des donn\'ees continues \`a variance finie (Waudby-Smith \& Ramdas~\cite{waudbysmith2021}) :
+\[
+  \lambda_t = \frac{\bar{X}_{t-1} - \mu_0}{\hat{\sigma}_{t-1}^2},
+  \quad
+  \lambda_t \in \Bigl[0,\;\tfrac{1}{2\hat{\sigma}_{t-1}}\Bigl[,
+  \qquad
+  \log M_t = \log M_{t-1}
+  + \lambda_t(X_t - \mu_0) - \tfrac{\lambda_t^2 \hat{\sigma}_{t-1}^2}{2}.
+\]
+
+\bigskip
+
+\begin{pratique}[Synth\`ese des s\'equences de confiance
+  disponibles]                                                      
+  \renewcommand{\arraystretch}{1.35}                                
+  \begin{tabular}{@{}lccccc@{}}                                     
+  \toprule                                                          
+  \textbf{M\'ethode} & \textbf{Donn\'ees} & \textbf{Param\`etre} &  
+  \textbf{Garantie} & \textbf{P-value} & \textbf{R\^ole} \\         
+  \midrule                                                          
+  NM                 & cont.\ / bin.              & $\rho$
+  auto-calibr\'e & formelle  & forme ferm\'ee  & UCB + BH \\
+  Pari Bernoulli     & binaires                   & aucun
+        & formelle  & $e^{-\log M_t}$ & BH       \\                 
+  Pari sous-gaussien & continues                  & aucun
+        & formelle  & $e^{-\log M_t}$ & BH       \\                 
+  \bottomrule     
+  \end{tabular}                                                     
+  \end{pratique}  
+
+  Dans notre impl\'ementation, le crit\`ere UCB repose uniquement sur
+  la s\'equence de confiance \textit{Normal Mixture} classique.
+  En revanche, au sein de la proc\'edure de Benjamini--Hochberg,
+  trois options de s\'equences de confiance sont propos\'ees~:
+  NM, le pari Bernoulli et le pari sous-gaussien.
+
+  La s\'equence NM intervient donc \`a deux niveaux~: d'une part dans
+  le calcul du rayon $\phinm$, qui pilote la s\'election des bras via
+  l'UCB, et d'autre part dans la proc\'edure BH lorsque le nombre
+  d'observations disponibles est encore trop faible.
+
+  Lorsque l'\'echantillon devient plus important, nous privil\'egions
+  ensuite une s\'equence de confiance sp\'ecialis\'ee selon la nature
+  des donn\'ees~: le pari Bernoulli pour les r\'esultats binaires, et
+  le pari sous-gaussien pour les mesures continues. Ces deux variantes
+  de pari ne n\'ecessitent aucun param\`etre de calibration et offrent
+  des garanties formelles directes.
+
+% ---------------------------------------------------------
+\subsection{Contr\^ole dynamique du FDR : proc\'edure BH anytime}
+% ---------------------------------------------------------
+
+\begin{intuition}[BH dans un cadre s\'equentiel]
+La proc\'edure de Benjamini-Hochberg~\cite{benjamini1995} contr\^ole le
+FDR en triant les p-values et en appliquant un seuil adaptatif~: le seuil
+accord\'e \`a chaque test d\'epend du nombre de tests qu'on souhaite
+valider. La cl\'e ici est que nos p-values sont \emph{anytime}~: elles
+restent valides \`a tout instant $t$, si bien qu'on peut ex\'ecuter BH
+\`a chaque pas de temps sans inflation du risque.
+\end{intuition}
+
+\`A chaque instant $t$, on trie les p-values $(p_1^t, \ldots, p_{n'}^t)$
+par ordre croissant et on cherche le plus grand $k^\star$ tel que :
+\[
+  p_{(k^\star)}^t \leq \frac{\delta \cdot k^\star}{n'},
+\]
+o\`u $n' = n$ est le nombre de traitements test\'es. On pose alors
+$S_t \leftarrow S_t \cup \{i : p_i^t \leq
+p_{(k^\star)}^t\}$ --- l'ensemble $S_t$ est monotone croissant.
+
+Ce seuil adaptatif est nettement moins conservateur que la correction de
+Bonferroni ($\delta/n$ fixe), et sa puissance cro\^it avec $k$~: plus il
+y a de traitements r\'eellement efficaces, plus le crit\`ere se rel\^ache
+prudemment.
+
+\begin{remarque}[Niveau BH et garantie formelle]
+Le Th\'eor\`eme~1 de Jamieson \& Jain~\cite{jamieson2019} garantit formellement FDR
+$\leq O(\delta\log(1/\delta))$ lorsque BH est appliqu\'e au niveau
+$\delta' = \delta/(6{,}4\log(36/\delta))$. En pratique, nous appliquons
+BH directement au niveau $\delta$, conform\'ement \`a la recommandation
+des auteurs qui estiment ce facteur logarithmique artifact de preuve
+(les p-values tendent vers les vraies valeurs \`a mesure que $t$ cro\^it,
+et le FDR observ\'e reste proche de $\delta$).
+\end{remarque}
+
+
+% ---------------------------------------------------------
+\subsection{Complexit\'e \'echantillonnale et gain adaptatif}
+% ---------------------------------------------------------
+
+Le r\'esultat th\'eorique central quantifie l'avantage de l'allocation
+adaptative sur l'allocation uniforme.
+
+\begin{theorem}{Complexit\'e d'\'echantillonnage --- Jamieson \& Jain~\cite{jamieson2019}}{samplecomp}
+\emph{(Mode mono-\'echantillon, $\mu_0$ connu.)}
+Soit $k = |\Halt|$, $\Delta = \min_{i\in\Halt}(\mu_i-\mu_0)$.
+Pour garantir FDR-$\delta$ et TPR-$\delta$ (Th\'eor\`eme~2 de J\&J),
+il existe $T$ tel que pour tout $t \geq T$ :
+\[
+  T \;\lesssim\; \min\!\left\{\;
+    n\Delta^{-2}\log\!\tfrac{\log\Delta^{-2}}{\delta},\;\;
+    \sum_{i\in\Hnull}\!\Delta_i^{-2}\log\!\tfrac{\log\Delta_i^{-2}}{\delta}
+    +
+    \sum_{i\in\Halt}\!\Delta_i^{-2}\log\!\tfrac{n\log\Delta_i^{-2}}{\delta}
+  \right\}.
+\]
+L'\'echantillonnage uniforme requiert quant \`a lui au moins
+$n\Delta^{-2}\log(n/k)$ tirages (Th\'eor\`eme~7~\cite{jamieson2019}). Le rapport
+$\tau_{\text{uniforme}} / \tau_{\text{adaptatif}} \sim \log(n/k)$
+r\'esume l'avantage adaptatif.
+\end{theorem}
+
+\begin{keyidea}[Ce que ce r\'esultat signifie concr\`etement]
+Le facteur $\log(n/k)$ est d'autant plus grand que $n$ est \'elev\'e et
+$k$ petit --- exactement la situation des m\'ega-\'etudes~\cite{bowen2022}.
+Par exemple, avec $n = 100$ traitements et $k = 1$ seul r\'eellement
+efficace, l'approche adaptative est \textbf{4.6 fois plus efficace} que
+l'approche uniforme. Cela se traduit directement par une r\'eduction du
+nombre de patients expos\'es \`a des traitements sous-optimaux.
+\end{keyidea}
+
+% ---------------------------------------------------------
+\subsection{R\`egle d'\'echantillonnage adaptatif (UCB)}
+% ---------------------------------------------------------
+
+Pour atteindre la complexit\'e optimale du
+Th\'eor\`eme~\ref{thm:samplecomp}, l'algorithme concentre ses tirages
+sur les bras les plus \emph{incertains}~: ceux dont la borne sup\'erieure
+de confiance (UCB) est la plus haute. Les bras d\'ej\`a class\'es dans
+$S_t$ ne sont plus explor\'es.
+
+\[
+  i_t = \underset{i \notin S_t}{\arg\max}
+    \Bigl[\muhat_i^{n_i}
+          + \phinm\!\left(n_i,\, \delta,\, \hat{V}_{n_i},\, \rho\right)\Bigr].
+\]
+
+\begin{pratique}[Phase d'initialisation]
+Avant de d\'emarrer le processus adaptatif, $n_0$ observations par bras
+sont collect\'ees pour amorcer les statistiques, auto-calibrer $\rho$ et
+effectuer un premier passage BH. Les observations du bras contr\^ole
+durant cette phase servent \`a estimer $\mu_0$, qui est ensuite fig\'e
+pour toute la dur\'ee de l'algorithme.
+\end{pratique}
+
+% ---------------------------------------------------------
+\subsection{Variante SR : remplacer UCB par des rejets successifs}
+% ---------------------------------------------------------
+
+L'algorithme de Jamieson \& Jain est composé de deux blocs~:
+une règle de sélection de bras (UCB) et une règle d'inférence (NM+BH).
+Nous testons une variante dans laquelle on remplace uniquement le bloc
+UCB par la stratégie des \textbf{Rejets Successifs}
+(Audibert, Bubeck \& Munos, COLT~2010~\cite{audibert2010}),
+en conservant l'inférence NM+BH identique.
+
+\paragraph{Règle de sélection par rejets successifs.}
+Avec $K$ bras et un budget $T$, l'algorithme divise l'exploration en
+$K-1$ phases. Dans chaque phase, les bras actifs sont tirés à tour de
+rôle (round-robin). À la fin de chaque phase, le bras ayant la plus
+faible moyenne empirique est \textbf{éliminé} :
+\[
+  i^* = \underset{i \in \mathcal{A}_k}{\arg\min}
+  \;\bigl(\hat{\mu}_i - \mu_0\bigr).
+\]
+Le calendrier des phases est fixé à l'avance~:
+\[
+  n_k = \left\lceil \frac{T - K}{\bar{\log}(K)\,(K + 1 - k)} \right\rceil,
+  \qquad
+  \bar{\log}(K) = \frac{1}{2} + \sum_{j=2}^{K} \frac{1}{j},
+\]
+où $n_k$ est le nombre cumulé de tirages par bras actif à la fin de
+la phase $k$. Les phases tardives reçoivent plus de tirages~: quand
+il reste peu de bras, chacun est mieux estimé avant d'être éliminé.
+
+\paragraph{Différence avec UCB.}
+Dans J\&J, UCB concentre dynamiquement les tirages sur les bras les
+plus incertains. SR suit au contraire un calendrier fixe, sans
+s'adapter aux observations en cours de route. Garder la même inférence
+NM+BH pour les deux variantes permet d'isoler l'effet pur de la règle
+de sélection sur le FDR et le TPR.
+
+% ---------------------------------------------------------
+\subsection{Simulation sur donn\'ees r\'eelles : strat\'egie de rééchantillonnage}
+% ---------------------------------------------------------
+
+Pour évaluer les performances de l'algorithme sur les jeux de données
+réels, chaque expérience est répétée $N$ fois afin d'estimer la variabilité
+des résultats. Cela nécessite de disposer de $N$ scénarios distincts à
+partir d'un même jeu de données fini. Deux mécanismes sont utilisés.
+
+\paragraph{Mélange des données entre simulations.}
+Avant chaque simulation, l'ordre des observations de chaque bras est
+mélangé aléatoirement. Ainsi, deux simulations voient les mêmes patients
+dans des ordres différents, ce qui reproduit l'aléa lié à l'ordre
+d'arrivée des participants sans nécessiter de nouvelles données.
+
+\paragraph{Rééchantillonnage lorsque les données sont épuisées.}
+Lorsque l'algorithme a consommé toutes les observations disponibles pour
+un bras (c'est-à-dire $T_i(t) > n_i$), les observations suivantes sont
+tirées \textbf{au hasard parmi les données déjà observées} de ce bras :
+\[
+  X_{i,t} \sim \mathrm{Uniforme}\bigl(x_{i,1}, \ldots, x_{i,n_i}\bigr)
+  \quad \text{si } T_i(t) > n_i.
+\]
+On tire donc avec remise dans l'échantillon existant du bras, ce qui
+revient à supposer que les nouvelles observations suivent la même
+distribution que les observations passées. Ce mécanisme permet à
+l'algorithme de fonctionner sur un horizon $T > n_i$ sans introduire
+d'hypothèse sur la forme de la loi des données.
+
+% ---------------------------------------------------------
+\subsection{Pr\'eservation des garanties th\'eoriques}
+% ---------------------------------------------------------
+
+Le Théorème~1 de Jamieson \& Jain~\cite{jamieson2019} établit que la
+procédure BH appliquée à des p-valeurs anytime contrôle le FDR à niveau
+$O(\alpha\log(1/\alpha))$ dès lors que : (i) les p-valeurs nulles
+$\{p_t^k\}_{k\in H_0}$ sont \emph{sub-uniformes}, au sens où
+$\mathbb{P}(\exists t : p_t^k \leq x) \leq x$, et (ii) les p-valeurs nulles
+sont indépendantes entre bras. Le cadre original suppose également que
+$\mu_0$ est connu et fixe. Les modifications que nous introduisons doivent
+donc être évaluées selon deux critères distincts : la validité anytime des
+p-valeurs individuelles et la structure de dépendance entre bras.
+
+\paragraph{CS Normal Mixture.}
+La CS Normal Mixture fondée sur la statistique de variance prévue par la
+borne fournit des p-valeurs anytime sub-uniformes sous $H_0^k$, et s'inscrit
+donc directement dans la condition (i) du Théorème~1.
+
+\paragraph{Paris de Kelly / betting.}
+Pour les données Bernoulli, la procédure de pari séquentiel produit une
+martingale de richesse valide lorsque la mise $\lambda_t$ est mesurable par
+rapport au passé et que le facteur de richesse reste positif. Par l'inégalité
+de Ville, $p_t^k = 1/M_t^k$ est alors une p-valeur anytime sub-uniforme.
+Cette justification est formelle dans le cas mono-échantillon avec $\mu_0$
+fixe. Pour les données continues, le même raisonnement est valable si les
+observations sont gaussiennes ou sub-gaussiennes avec une variance proxy
+connue ou conservative. En revanche, si cette variance est estimée
+empiriquement sans correction supplémentaire, la validité martingale n'est
+plus automatique ; la méthode reste alors une variante pratique qui doit être
+validée par simulation ou appuyée par une preuve additionnelle.
+
+\paragraph{Mode mono-échantillon avec $\mu_0$ fixe.}
+Notre implémentation teste chaque bras $i$ contre un seuil $\mu_0$ fixé lors
+de la phase d'initialisation à partir des observations du bras contrôle.
+Comme $\mu_0$ est une constante indépendante des décisions futures, les
+e-processes de chaque bras sont indépendants entre eux et les p-valeurs
+$p_t^k = 1/M_t^k$ sont sub-uniformes sous $H_0^k$. Les deux conditions
+du Théorème~1 sont donc satisfaites, et la procédure BH contrôle le FDR
+directement sans correction supplémentaire.
+
+
+
+% =========================================================
+\section{Algorithme et Impl\'ementation}
+\label{sec:algo}
+% =========================================================
+
+Les trois variantes de s\'equences de confiance NM, NM-M2 et Paris adaptatifs de Kelly
+partagent la m\^eme structure algorithmique~: un rayon $\phinm$ pour le crit\`ere UCB,
+une mise \`a jour incr\'ementale des statistiques, et une p-valeur anytime pour les
+d\'ecisions BH.
+
+% ---------------------------------------------------------
+\subsection{S\'equences de confiance}
+% ---------------------------------------------------------
+
+\subsubsection{Normal Mixture~: rayon $\phinm$ et accumulation de $\hat{V}_t$}
+
+Les deux variantes NM et NM-M2 ne diff\`erent que dans la mani\`ere d'accumuler
+$\hat{V}_t$. L'Algorithme~\ref{alg:phi} d\'etaille le calcul du rayon et la mise
+\`a jour de la statistique de variance.
+
+\begin{algorithm}[H]
+\caption{Calcul du rayon $\phinm$ et mise \`a jour de $\hat{V}_t$}
+\label{alg:phi}
+\begin{algorithmic}[1]
+\Require nombre de tirages $t$, niveau $\delta$, variance cumul\'ee $\hat{V}$, param\`etre $\rho$
+\If{$t = 0$}
+  \State \textbf{retourner} $+\infty$
+\EndIf
+\State $\ell \leftarrow \log\!\Bigl(\sqrt{(\hat{V}+\rho)/\rho}\;/\;\delta\Bigr)$
+\State \textbf{retourner} $\sqrt{2\,(\hat{V}+\rho)\,\max(\ell,0)}\;/\;t$
+\vspace{0.4em}
+\State \textit{// Mise \`a jour de $\hat{V}$ apr\`es observation $X_t$, connaissant $\bar{X}_{t-1}$ et $\bar{X}_t$~:}
+\If{variante \textbf{NM}}
+  \State $\hat{V} \leftarrow \hat{V} + (X_t - \bar{X}_{t-1})^2$ \hfill\textit{// erreur de pr\'ediction}
+\Else\ \textit{(variante \textbf{NM-M2})}
+  \State $\hat{V} \leftarrow \hat{V} + (X_t - \bar{X}_{t-1})(X_t - \bar{X}_t)$ \hfill\textit{// Welford}
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{pratique}[Auto-calibration de $\rho$ apr\`es la phase d'initialisation]
+Apr\`es les premiers tirages, on fixe $\rho$ \`a la m\'ediane des variances empiriques par
+bras~: pour chaque bras $i$ ayant \'et\'e tir\'e au moins deux fois, on calcule
+$\hat{V}_i / (n_i - 1)$, puis $\rho \leftarrow \mathrm{m\'ediane}_i$ de ces valeurs.
+Cela rend l'algorithme robuste aux changements d'\'echelle sans r\'eglage manuel.
+\end{pratique}
+
+\subsubsection{P-valeur anytime}
+
+L'Algorithme~\ref{alg:pval} calcule la p-valeur anytime d'un bras en temps constant,
+par inversion analytique du rayon NM ou par l'in\'egalit\'e de Ville pour le pari.
+
+\begin{algorithm}[H]
+\caption{P-valeur anytime --- $\calO(1)$, mono et bi-\'echantillon}
+\label{alg:pval}
+\begin{algorithmic}[1]
+\Require bras $i$, nombre de tirages $t$, moyenne $\hat{\mu}_i$, seuil $\mu_0$,
+         variance $\hat{V}$, param\`etre $\rho$, log-martingale $\log M$
+\If{$t = 0$ \textbf{ou} $\hat{\mu}_i \leq \mu_0$}
+  \State \textbf{retourner} $1$
+\EndIf
+\If{variante \textbf{Paris adaptatifs de Kelly}}
+  \State \textbf{retourner} $\exp(-\log M)$ \hfill\textit{// in\'egalit\'e de Ville : $p = 1/M_t$}
+\Else\ \textit{(variante \textbf{NM} ou \textbf{NM-M2})}
+  \State $\Delta \leftarrow \hat{\mu}_i - \mu_0$
+  \State \textbf{retourner} $\sqrt{(\hat{V}+\rho)/\rho}\cdot\exp\!\bigl(-\Delta^2 t^2 / (2(\hat{V}+\rho))\bigr)$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Paris adaptatifs de Kelly --- donn\'ees continues (sous-gaussiennes)}
+
+La mise $\lambda_t$ est calcul\'ee \`a partir des statistiques du pas pr\'ec\'edent
+(\emph{avant} mise \`a jour), ce qui garantit la $\mathcal{F}_{t-1}$-mesurabilit\'e.
+
+\begin{algorithm}[H]
+\caption{Pari de Kelly --- donn\'ees continues (sous-gaussiennes)}
+\label{alg:kelly_cont}
+\begin{algorithmic}[1]
+\Require observation $X_t$, ancienne moyenne $\bar{\mu}_{t-1}$, variance $\hat{\sigma}^2$,
+         seuil $\mu_0$ \quad [\textit{bi-\'echantillon~: observation contr\^ole $X_c$, variance $\hat{\sigma}_c^2$}]
+\If{$\bar{\mu}_{t-1} - \mu_0 \leq 0$}
+  \State ne pas miser \quad ($\log M$ inchang\'e)
+\Else
+  \If{mono-\'echantillon}
+    \State $\lambda \leftarrow \mathrm{clip}\!\left(\dfrac{\bar{\mu}_{t-1}-\mu_0}{\hat{\sigma}^2},\;0,\;\dfrac{1}{2\sqrt{\hat{\sigma}^2}}\right)$
+    \State $\log M \leftarrow \log M + \lambda(X_t - \mu_0) - \tfrac{1}{2}\lambda^2\hat{\sigma}^2$
+  \Else\ \textit{(bi-\'echantillon)}
+    \State $\hat{\sigma}^2_{\mathrm{diff}} \leftarrow \hat{\sigma}^2 + \hat{\sigma}_c^2$
+    \State $\lambda \leftarrow \mathrm{clip}\!\left(\dfrac{\bar{\mu}_{t-1}-\bar{\mu}_{c,t-1}}{\hat{\sigma}^2_{\mathrm{diff}}},\;0,\;\dfrac{1}{2\sqrt{\hat{\sigma}^2_{\mathrm{diff}}}}\right)$
+    \State $\log M \leftarrow \log M + \lambda(X_t - X_c) - \tfrac{1}{2}\lambda^2\hat{\sigma}^2_{\mathrm{diff}}$
+  \EndIf
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Paris adaptatifs de Kelly --- donn\'ees binaires (Bernoulli)}
+
+Pour $X_t \in \{0,1\}$, la martingale est multiplicative~: on accumule un facteur de
+richesse $W_t$ dont le logarithme refl\`ete la g\'eom\'etrie de la famille de Bernoulli.
+
+\begin{algorithm}[H]
+\caption{Pari de Kelly --- donn\'ees binaires (Bernoulli)}
+\label{alg:kelly_bern}
+\begin{algorithmic}[1]
+\Require observation $X_t \in \{0,1\}$, ancienne moyenne $\bar{\mu}_{t-1}$, seuil $\mu_0$
+         \quad [\textit{bi-\'echantillon~: $X_c$, $\bar{\mu}_{c,t-1}$}]
+\If{$\bar{\mu}_{t-1} - \mu_0 \leq 0$}
+  \State ne pas miser \quad ($\log M$ inchang\'e)
+\Else
+  \If{mono-\'echantillon}
+    \State $\lambda \leftarrow \mathrm{clip}\!\left(\dfrac{\bar{\mu}_{t-1}-\mu_0}{\mu_0(1-\mu_0)},\;0,\;\tfrac{1}{\mu_0}-\varepsilon\right)$
+    \State $W_t \leftarrow 1 + \lambda(X_t - \mu_0)$
+  \Else\ \textit{(bi-\'echantillon)}
+    \State $\hat{\sigma}^2 \leftarrow \bar{\mu}_{t-1}(1-\bar{\mu}_{t-1}) + \bar{\mu}_{c,t-1}(1-\bar{\mu}_{c,t-1})$
+    \State $\lambda \leftarrow \mathrm{clip}\!\left(\dfrac{\bar{\mu}_{t-1}-\bar{\mu}_{c,t-1}}{\hat{\sigma}^2},\;0,\;1-\varepsilon\right)$
+    \State $W_t \leftarrow 1 + \lambda(X_t - X_c)$
+  \EndIf
+  \If{$W_t > 0$}
+    \State $\log M \leftarrow \log M + \log W_t$
+  \EndIf
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{keyidea}[Interpr\'etation commune des deux variantes de paris adaptatifs]
+Dans les deux cas, $\lambda_t = 0$ si le bras ne semble pas meilleur que la r\'ef\'erence,
+et croissant avec l'\'ecart estim\'e. La diff\'erence est dans la forme du gain~: additif
+avec correction quadratique pour les donn\'ees gaussiennes, multiplicatif pour Bernoulli.
+En bi-\'echantillon, la martingale porte sur $D_t = X_i - X_c$ sans supposer $\mu_c$
+connu, \'evitant la correction union bound n\'ecessaire pour NM.
+\end{keyidea}
+
+% ---------------------------------------------------------
+\subsection{S\'election UCB et proc\'edure BH}
+% ---------------------------------------------------------
+
+L'Algorithme~\ref{alg:main} d\'ecrit la boucle principale~: \`a chaque pas $t$,
+on s\'electionne le bras par UCB, on tire une observation, on met \`a jour les
+statistiques et la martingale, puis on applique BH pour d\'etecter les bras valides.
+
+\begin{algorithm}[H]
+\caption{Boucle principale --- UCB adaptatif et BH anytime}
+\label{alg:main}
+\begin{algorithmic}[1]
+\Require $n$ bras, seuil $\mu_0$, niveau $\delta$, bras contr\^ole $c$ (ou \textsc{Aucun})
+\State Tirer chaque bras une fois~; initialiser $\hat{\mu}_i$, $\hat{V}_i$, $n_i$, $\log M_i \leftarrow 0$, $S_t \leftarrow \emptyset$
+\State Calibrer $\rho \leftarrow \mathrm{m\'ediane}_i\bigl(\hat{V}_i/(n_i-1)\bigr)$
+\For{$t = n+1, n+2, \ldots$}
+  \State \textit{// --- S\'election UCB ---}
+  \State $\mathrm{candidats} \leftarrow \{i \in [n] : i \notin S_t\}$ \quad (bras contr\^ole toujours inclus si bi-\'echantillon)
+  \If{mono-\'echantillon}
+    \State $I_t \leftarrow \arg\max_{i\,\in\,\mathrm{candidats}} \hat{\mu}_i + \phinm(n_i, \delta, \hat{V}_i)$
+  \Else\ \textit{(bi-\'echantillon)}
+    \State $I_t \leftarrow \arg\max_{i\,\in\,\mathrm{candidats}\setminus\{c\}} (\hat{\mu}_i - \hat{\mu}_c) + \phinm(n_i,\delta,\hat{V}_i) + \phinm(n_c,\delta,\hat{V}_c)$
+  \EndIf
+  \State Tirer le bras $I_t$~; obtenir observation $X_t$
+  \State Mettre \`a jour $\hat{\mu}_{I_t}$, $\hat{V}_{I_t}$, $n_{I_t}$~; mettre \`a jour $\log M_{I_t}$ (Alg.~\ref{alg:kelly_cont} ou~\ref{alg:kelly_bern})
+  \vspace{0.3em}
+  \State \textit{// --- BH anytime ---}
+  \State $m \leftarrow |\mathrm{candidats} \setminus \{c\}|$ \quad (bras en test, contr\^ole exclu)
+  \State Calculer $p_i$ pour tout $i \notin S_t,\, i \neq c$ \quad (Alg.~\ref{alg:pval})
+  \State Trier~: $p_{(1)} \leq p_{(2)} \leq \cdots \leq p_{(m)}$
+  \State $k^* \leftarrow \max\bigl\{k : p_{(k)} \leq \delta\cdot k/m\bigr\}$
+  \State $S_t \leftarrow S_t \cup \{$bras de rang $1$ \`a $k^*\}$ \hfill\textit{// monotone croissant}
+  \If{$\mathrm{candidats} \setminus \{c\} = \emptyset$}
+    \State \textbf{arr\^eter}
+  \EndIf
+\EndFor
+\Ensure ensemble $S_t$ contr\^olant le FDR au niveau $\delta$ \`a tout instant
+\end{algorithmic}
+\end{algorithm}
+
+\begin{pratique}[Correction union bound pour NM en bi-\'echantillon]
+La variante NM utilise $\phinm(n_i,\,\delta/2,\,\hat{V}_i) + \phinm(n_c,\,\delta/2,\,\hat{V}_c)$~:
+le niveau est divis\'e par~2 (union bound) pour que l'intervalle joint sur $\mu_i - \mu_c$
+reste valide au niveau global $\delta$. La variante pari n'en a pas besoin~: la martingale
+porte directement sur $D_t$ et reste une sur-martingale sous $H_0$.
+\end{pratique}
+
+% =========================================================
+\section{Etude de Simulation}
+\label{sec:simulation}
+% =========================================================
+
+% Contenu a rediger.
+
+Cette section présente une étude empirique par simulation visant à vérifier
+les garanties théoriques établies dans la Section~\ref{sec:cadre} et à
+quantifier l'avantage pratique de l'allocation adaptative sur l'allocation
+uniforme dans différentes conditions expérimentales.
+
+% ---------------------------------------------------------
+\subsection{Protocole expérimental}
+% ---------------------------------------------------------
+
+\subsubsection{Environnement de simulation}
+
+Les simulations ont été conduites en Python à l'aide d'un simulateur
+interactif développé pour l'occasion(Voir Annexe). Chaque bras $i$ génère des
+récompenses $X_{i,t} \sim \mathcal{N}(\mu_i, \sigma^2)$. Pour garantir
+l'équité de la comparaison, les deux algorithmes consomment exactement
+les mêmes séquences d'observations pré-générées (\textit{variance
+reduction by common random numbers}~\cite{johari2022}). Sauf mention contraire, toutes les expériences de cette section utilisent la séquence de confiance $\phi_{LIL}$ (Section 2.3), conformément aux expériences originales de Jamieson & Jain. La comparaison avec NM-M2 et le pari sous-gaussien est traitée séparément en Section 5.3.
+
+\subsubsection{Métriques d'évaluation}
+
+Nous mesurons deux quantités principales :
+
+\begin{itemize}
+  \item Le \textbf{TPR moyen} à l'instant $t$ :
+  $\bar{\rho}(t)$ est l'estimateur empirique sur $N$ simulations de la quantité $\mathbb{E}\!\left[\,|S_t \cap H_1| \,/\, |H_1|\,\right]$ introduite à la Définition 2.2.
+  \item Le \textbf{temps au TPR 90\%}, noté $\tau_{0.9}$, défini comme
+  le premier instant $t$ tel que $\bar{\rho}(t) \geq 0.9$.
+  \textbf{gain} d'un algorithme sur l'autre est le rapport relatif
+  $1-\tau_{0.9}^{\text{adapt}}/\tau_{0.9}^{\text{unif}}$. Cette
+  métrique résume la vitesse en un scalaire interprétable
+  (un gain de $50\,\%$ signifie « budget divisé par deux »), mais
+  elle est \emph{indéfinie} lorsqu'un algorithme n'atteint jamais
+  $90\,\%$ dans l'horizon imparti : les régimes difficiles
+  ($\sigma$ élevé, $\Delta$ faible) la rendent inexploitable.
+
+  \item L'\textbf{aire sous la courbe TPR} (AUC), définie par
+  $\mathrm{AUC} = \frac{1}{T}\int_0^T \bar{\rho}(t)\,dt$, intègre
+  toute la dynamique en un scalaire compris entre $0$ et $1$. Elle
+  reste définie même quand $\tau_{0.9}$ sature, et valorise les
+  algorithmes qui atteignent un bon TPR \emph{tôt} plutôt que
+  seulement à la fin. Elle sert ainsi de mesure de robustesse,
+  complémentaire à $\tau_{0.9}$.
+\end{itemize}
+Enfin, pour rendre les expériences sur le bruit et l'écart entre bras
+directement comparables, nous reparamétrons le rapport signal/bruit
+par le \textbf{$d$ de Cohen}, $d = \Delta/\sigma$. Les seuils usuels ($d\approx 0{,}2$ effet
+faible, $0{,}5$ moyen, $0{,}8$ fort) fournissent une grille de lecture
+standard pour situer chaque régime expérimental.
+
+\subsubsection{Configuration de base}
+
+Sauf mention contraire, les paramètres par défaut sont :
+$n = 3$ bras, $\sigma = 0{,}5$, $\delta = 0{,}05$, $\mu_0 = 0$,
+horizon $T = 800$, et $N = 200$ simulations indépendantes.
+Les bras sont configurés comme suit :
+$\mu = (0{,}5;\; 0{,}35;\; 0{,}0)$,
+soit $|\mathcal{H}_1| = 2$ vrais positifs et
+$|\mathcal{H}_0| = 1$ négatifs.
+
+% ---------------------------------------------------------
+\subsection{Expérience 1 : Influence du niveau de confiance $\delta$}
+% ---------------------------------------------------------
+
+\subsubsection{Protocole}
+
+Nous faisons varier $\delta \in \{0{,}01;\; 0{,}05;\; 0{,}10;\; 0{,}20\}$
+en maintenant fixes $\sigma = 1{,}0$ et la configuration de bras standard.
+
+\subsubsection{Résultats}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccccc}
+\hline
+$\delta$ & $\tau_{0.9}$ Adaptatif & $\tau_{0.9}$ Uniforme
+         & Gain & Interprétation \\
+\hline
+0,01 & 75 & 156 & 51,9\,\% & Très conservateur \\
+0,05 & 53 & 119 & 55,5\,\% & Standard \\
+0,10 & 52 & 115 & 54,8\,\% & Agressif \\
+0,20 & 38 &  83 & 54,2\,\% & Très agressif \\
+\hline
+\end{tabular}
+\caption{Temps pour atteindre 90\% de TPR en fonction de $\delta$.}
+\label{tab:delta}
+\end{table}
+
+\subsubsection{Analyse}
+
+La séquence de confiance utilisée ici est
+$\phi_{\mathrm{LIL}}$ (Section~\ref{sec:cadre}), qui contient le
+terme $\log(1/\delta)$. Augmenter $\delta$ resserre donc le rayon de
+confiance et accélère \emph{les deux} algorithmes : passer de
+$\delta=0{,}01$ à $\delta=0{,}20$ divise $\tau_{0.9}$ par environ
+deux dans chaque cas (75$\to$38 pour Adaptive, 156$\to$83 pour
+Uniform). Le gain relatif de l'adaptatif sur l'uniforme reste en
+revanche stable autour de $52$--$55\,\%$ : la complexité des deux régimes est en
+$\mathcal{O}(\Delta^{-2}\log(1/\delta))$ (Théorème~\ref{thm:samplecomp}),
+de sorte que $\delta$ apparaît avec le même exposant dans les deux
+et ne modifie pas leur hiérarchie. Le choix de $\delta$ relève donc
+d'un arbitrage \emph{vitesse de découverte / contrôle des erreurs} :
+un $\delta$ élevé accélère uniformément les deux algorithmes, mais
+autorise un FDR jusqu'à 20\,\%.
+% ---------------------------------------------------------
+\subsection{Expérience 2 : Influence du bruit $\sigma$}
+% ---------------------------------------------------------
+
+\subsubsection{Protocole}
+
+Nous faisons varier $\sigma \in \{0{,}1;\; 0{,}5;\; 1{,}0;\; 2{,}0\}$
+avec $\delta = 0{,}05$ fixe.
+
+\subsubsection{Résultats}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccccc}
+\hline
+$\sigma$ & $\tau_{0.9}$ Adapt. & $\tau_{0.9}$ Unif. & Gain & Régime \\
+\hline
+0,1    & 0       & 0       &   0\,\%  & Trivial \\
+0,5    & 60      & 125     &  52\,\%  & Favorable \\
+1,0    & 334     & 630     &  47\,\%  & Difficile \\
+2,0    & $>$800  & $>$800  &   ---    & Impossible \\
+\hline
+\end{tabular}
+\caption{Influence du bruit $\sigma$ sur le temps au TPR 90\,\%
+         ($N=200$ simulations).}
+\label{tab:sigma}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp2/exp2_0.1.png}
+        \caption{$\sigma = 0{,}1$}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp2/exp2_0.5.png}
+        \caption{$\sigma = 0{,}5$}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp2/exp2_1.0.png}
+        \caption{$\sigma = 1{,}0$}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp2/exp2_2.0.png}
+        \caption{$\sigma = 2{,}0$}
+    \end{subfigure}
+    \caption{Courbes TPR Adaptatif vs Uniforme pour différentes valeurs de $\sigma$.}
+    \label{fig:exp1-sigma}
+\end{figure}
+
+
+\subsubsection{Analyse}
+
+Le gain adaptatif suit une courbe en U inversé, nul aux deux extrêmes et maximal dans un régime intermédiaire. À $\sigma=0{,}1$, le rapport signal/bruit est si favorable que BH valide les positifs dès la phase d'initialisation : les deux algorithmes atteignent TPR$\,=\,1$ à $t=0$ et il n'y a rien à gagner pour l'adaptatif. À $\sigma=2{,}0$, c'est l'inverse : la complexité en $\sigma^2/\Delta^2$ dépasse l'horizon $T=800$ et aucun des deux algorithmes n'atteint 90\,\% de TPR (le gain n'est donc pas
+mesurable). L'adaptatif n'exploite son avantage que dans une plage où
+le rapport $\Delta/\sigma$ est assez grand pour discriminer les bras
+\emph{et} où $T$ permet la convergence. Sur cette plage ($\sigma\in[0{,}5;\,1{,}0]$), le gain plafonne autour de $50\,\%$, soit un budget expérimental divisé par deux.
+
+% ---------------------------------------------------------
+\subsection{Expérience 3 : Influence de l'écart entre bras ($\Delta$)}
+% ---------------------------------------------------------
+
+\subsubsection{Protocole}
+
+Nous testons trois configurations ($\sigma = 0{,}5$, $\delta = 0{,}05$) :
+
+\begin{itemize}
+  \item \textbf{Grand écart} : $\mu = (0{,}8;\; 0{,}8;\; 0{,}2;\; 0{,}2;\; 0;\; 0)$,
+        $\Delta= 0{,}2$
+  \item \textbf{Écart moyen} : $\mu = (0{,}6;\; 0{,}6;\; 0{,}4;\; 0{,}4;\; 0;\; 0)$,
+        $\Delta = 0{,}4$
+  \item \textbf{Petit écart} : $\mu = (0{,}55;\; 0{,}55;\; 0{,}45;\; 0{,}45;\; 0;\; 0)$,
+        $\Delta = 0{,}45$
+
+\subsubsection{Résultats}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cccc}
+\hline
+$\Delta$ & $\tau_{0.9}$ Adapt. & $\tau_{0.9}$ Unif. & Gain \\
+\hline
+0,45 & 52  & 144    & 63,9\,\% \\
+0,4  & 59  & 185    & 68,1\,\% \\
+0,2  & 286 & $>$800 & $\geq 64{,}2\,\%$ \\
+\hline
+\end{tabular}
+\caption{Influence de l'écart minimal $\Delta$ ($N=200$). Pour $\Delta=0{,}2$,
+         $\tau_{0.9}$ uniforme dépasse l'horizon $T=800$.}
+\label{tab:delta_gap}
+\end{table}
+
+\end{itemize}
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp3/exp3_0.8.png}
+        \caption{Grand écart ($\Delta_{\min} = 0{,}8$)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp3/exp3_0.6.png}
+        \caption{Écart moyen ($\Delta_{\min} = 0{,}6$)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp3/exp3_0.55.png}
+        \caption{Petit écart ($\Delta_{\min} = 0{,}55$)}
+    \end{subfigure}
+    \caption{Courbes TPR Adaptatif vs Uniforme selon l'écart entre bras ($\sigma = 0{,}5$, $\delta = 0{,}05$).}
+    \label{fig:exp3-delta}
+\end{figure}
+\subsubsection{Analyse}
+
+Les $\tau_{0.9}$ des deux algorithmes croissent
+approximativement en $\Delta^{-2}$ : diviser $\Delta$ par $2{,}25$
+(de $0{,}45$ à $0{,}2$) multiplie $\tau$ par environ $5$
+($52\to 286$ pour Adaptive), à comparer au facteur théorique
+$(0{,}45/0{,}2)^2\approx 5{,}1$. Cette mise à l'échelle valide
+empiriquement la complexité $\mathcal{O}(\Delta^{-2})$ du
+Théorème~\ref{thm:samplecomp}. Le gain relatif reste en revanche stable
+autour de $65\,\%$, car les facteurs $\Delta^{-2}$ apparaissent
+identiquement dans les deux régimes et se compensent dans le rapport
+$\tau_{\text{unif}}/\tau_{\text{adapt}}$. Pour $\Delta=0{,}2$,
+$\tau_{0.9}^{\text{unif}}$ est censuré par l'horizon $T=800$ : le gain
+affiché est donc un minorant. L'enseignement pratique : l'horizon doit
+être dimensionné en proportion de $\Delta^{-2}$, faute de quoi
+l'avantage adaptatif est masqué par le manque de temps.
+
+% ---------------------------------------------------------
+\subsection{Expérience 4 : Influence de l'initialisation (\texttt{init\_pulls})}
+% ---------------------------------------------------------
+\subsubsection{Protocole}
+
+Nous activons la phase d'initialisation de l'algorithme adaptatif
+uniquement, avec $\texttt{init\_nb} \in \{0;\; 10;\; 30;\; 50\}$
+observations pré-données par bras, $\sigma = 0{,}5$, $\delta = 0{,}05$.
+
+\subsubsection{Résultats}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp4/exp4_0.png}
+        \caption{\texttt{init\_pulls} $= 0$}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp4/exp4_10.png}
+        \caption{\texttt{init\_pulls} $= 10$}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp4/exp4_30.png}
+        \caption{\texttt{init\_pulls} $= 30$}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_exp4/exp4_50.png}
+        \caption{\texttt{init\_pulls} $= 50$}
+    \end{subfigure}
+    \caption{Courbes TPR Adaptatif vs Uniforme pour différentes valeurs
+    de \texttt{init\_pulls} ($\sigma = 0{,}5$, $\delta = 0{,}05$, $T = 800$).}
+    \label{fig:exp4-init}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cccc}
+\hline
+\texttt{init\_pulls} & $\tau_{0.9}$ Adapt. & $\tau_{0.9}$ Unif. & Gain \\
+\hline
+0  & 79 & 142 & 44,4\,\% \\
+10 & 57 & 120 & 52,5\,\% \\
+30 & 26 &  66 & 60,6\,\% \\
+50 & 3  &  12 & 75,0\,\% \\
+\hline
+\end{tabular}
+\caption{Impact de \texttt{init\_pulls} sur $\tau_{0.9}$ post-init
+         ($N=200$).}
+\label{tab:init}
+\end{table}
+
+\subsubsection{Analyse}
+
+Augmenter \texttt{init\_pulls} accélère les deux
+algorithmes car BH dispose d'observations plus fiables dès la fin de
+l'initialisation : à \texttt{init\_pulls}$=50$, les positifs sont
+quasiment tous validés pendant l'init lui-même et $\tau_{0.9}$ chute à
+$3$ pour Adaptive et $12$ pour Uniform. Le gain relatif d'Adaptive
+\emph{augmente} avec l'init ($44\,\% \to 75\,\%$) : sa règle UCB est
+d'autant plus efficace que la calibration de $\rho$ et les
+estimations initiales sont fiables, alors qu'Uniform continue
+d'allouer mécaniquement de manière égale et ne tire pas autant parti
+de l'information accumulée. Cette amélioration a toutefois un prix :
+$\tau_{0.9}$ ne compte pas le coût de l'init, et le \emph{budget
+total} (init + post-init) d'Adaptive passe de 79 observations à 153.
+Le choix de \texttt{init\_pulls} relève donc d'un arbitrage
+\emph{coût total / qualité de la convergence post-init} ; en pratique,
+\texttt{init\_pulls}$=10$ constitue un compromis raisonnable
+($87$ observations totales pour un gain de $52\,\%$).
+
+%
+\subsection{Expérience 5 : Proportion de vrais positifs}
+% -----------------------------------------------------
+
+\subsubsection{Protocole}
+
+Nous fixons $n = 10$ bras et faisons varier la proportion de vrais positifs
+$k/n$ avec $k \in \{1, 3, 5, 7, 9\}$. Les bras positifs ont une moyenne
+$\mu_i = 0{,}5$ et les bras négatifs $\mu_i = 0$, soit un écart constant
+$\Delta = 0{,}5$. Les paramètres sont $\sigma = 1{,}0$, $\delta = 0{,}05$,
+$T = 800$ et $N = 50$ simulations indépendantes par configuration.
+
+\subsubsection{Résultats}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{graphes_exp6/exp6.png}
+    \caption{Courbes TPR Adaptatif vs Uniforme pour différentes proportions 
+    de vrais positifs ($\sigma = 1{,}0$, $\delta = 0{,}05$, $T = 800$).}
+    \label{fig:exp6-proportions}
+\end{figure}
+
+\subsubsection{Analyse}
+
+La proportion $k/n$ de vrais positifs influence directement le gain
+théorique $\log(n/k)$ (Théorème~\ref{sec:cadre}). Quand $k$ est petit
+(peu de bons bras), ce facteur logarithmique est élevé : l'algorithme
+adaptatif bénéficie d'un avantage plus important car il identifie
+rapidement les rares bons bras et concentre ses ressources sur eux.
+
+On observe également un paradoxe apparent : trouver un seul bon bras
+parmi dix (configuration 1/9) est plus difficile que d'en trouver neuf
+(configuration 9/1), car le TPR mesure un taux — ne pas trouver le
+seul vrai positif maintient le TPR à 0. En configuration 9/1, en
+revanche, chaque tirage a 90\% de chances de porter sur un bon bras,
+ce qui accélère mécaniquement la découverte.
+
+
+% ---------------------------------------------------------
+\subsection{Synthèse des simulations}
+% ---------------------------------------------------------
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lll}
+\hline
+\textbf{Paramètre} & \textbf{Effet sur le gain adaptatif} & \textbf{Recommandation} \\
+\hline
+$\delta$ élevé              & Stable ($\sim 55\,\%$)                                  & Arbitrage vitesse / FDR \\
+$\sigma$ extrême            & Effondré (U inversé)                                    & Régime intermédiaire requis \\
+$\Delta$ petit              & Stable ($\sim 65\,\%$), $T$ doit suivre $\Delta^{-2}$  & Augmenter $T$ \\
+\texttt{init\_pulls} élevé  & Amplifié ($44 \to 75\,\%$), budget total accru          & Compromis vers $10$ \\
+$k/n$ petit                 & Amplifié                                                & Adaptatif crucial si $k\ll n$ \\
+\hline
+\end{tabular}
+\caption{Synthèse de l'influence des paramètres sur les performances
+         comparées des deux algorithmes.}
+\label{tab:synthese}
+\end{table}
+
+Les simulations confirment le résultat théorique central de
+Jamieson \& Jain~\cite{jamieson2019} : l'algorithme adaptatif
+tire son avantage dans les \textbf{situations difficiles}, c'est-à-dire
+lorsque les signaux sont faibles ($\Delta$ petit), le bruit modéré
+($\sigma$ raisonnable) et les vrais positifs rares ($k \ll n$). Dans
+ces conditions, le gain empirique atteint jusqu'à 35\% de réduction du
+budget expérimental, en accord qualitatif avec le facteur théorique
+$\log(n/k)$.
+
+
+% =========================================================
+\section{Application Empirique}
+\label{sec:empirique}
+% =========================================================
+
+
+\subsection{Modifications}
+
+\subsection{Présentation des algorithmes adapté aux données réelles}
+
+L'algorithme de Jamieson \& Jain repose sur plusieurs hypothèses qui le rendent particulièrement adapté au cadre théorique, mais sensiblement moins aux conditions rencontrées sur des données réelles.
+\newline \newline
+Parmi les éléments susceptibles d'affecter ses performances, on peut citer l'hypothèse d'une variance fixée à $1$, introduite afin de simplifier les démonstrations théoriques. En pratique, la variance d'une population est rarement égale à $1$. Nous avons donc recours à une estimation empirique de cette variance à l'aide de la méthode de Welford.
+\newline \newline
+Dès lors, il devient naturel d'utiliser des versions de la largeur d'intervalle de confiance anytime ($\phi$) qui tiennent compte de la variance estimée. Nous considérons ainsi d'autres méthodes de calcul de $\phi$, notamment la \textit{Normal Mixture Confidence} fondée sur l'estimateur de variance M2 de Welford (\texttt{nm\_m2}), ainsi que la méthode par martingale de pari (\textit{betting}).
+
+
+
+\subsection{Comparaison des trois algorithmes sur données simulées}
+
+Avant d'appliquer les trois algorithmes aux données réelles, nous les
+comparons sur une configuration plus exigeante que celle de la
+Section~\ref{sec:simulation} : $n=8$ bras, dont $2$ positifs
+($\mu_0=0{,}35$, $\mu_1=0{,}30$), $4$ nuls ($\mu_2=\cdots=\mu_5=0$) et
+$2$ négatifs ($\mu_6=\mu_7=-0{,}30$), avec $\sigma=1{,}0$ et
+$\delta=0{,}05$. Pour stabiliser l'estimation du FDR près du seuil,
+$N=500$ simulations sont effectuées pour NM-M2 et le pari sous-gaussien
+(JJ reste à $N=200$, son FDR étant nettement inférieur à $\delta$).
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lccc}
+\hline
+\textbf{Algorithme} & \textbf{TPR moyen} & \textbf{FDR moyen} & \textbf{Contrôle FDR} \\
+\hline
+JJ (LIL)            & $0{,}890$ & $0{,}004$ & \checkmark \\
+NM-M2               & $0{,}975$ & $0{,}005$ & \checkmark \\
+Pari sous-gaussien  & $0{,}980$ & $\mathbf{0{,}054}$ & \textbf{Dépassé} \\
+\hline
+\end{tabular}
+\caption{Comparaison des trois algorithmes sur la configuration $8$ bras
+         ($\sigma=1{,}0$, $\delta=0{,}05$).}
+\label{tab:comparaison_simul}
+\end{table}
+
+
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/section5_JJ.png}
+        \caption{JJ (LIL) — TPR$\,=\,0{,}89$}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/section5_v3.png}
+        \caption{Pari sous-gaussien — TPR$\,=\,0{,}975$}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/section5_nm2.png}
+        \caption{NM-M2 — TPR$\,=\,0{,}983$}
+    \end{subfigure}
+    \caption{Vitesse de découverte des trois algorithmes sur la
+             configuration 8 bras (Adaptive en orange, Uniform en bleu).}
+    \label{fig:comparaison_simul}
+\end{figure}
+
+\paragraph{Analyse} Le résultat le plus marquant concerne le \textbf{pari
+sous-gaussien} : son FDR empirique ($0{,}054$) dépasse le seuil
+$\delta=0{,}05$, malgré sa garantie supposée formelle. Cela renvoie
+directement à la discussion de la Section~\ref{sec:cadre} (2.7) : la
+validité martingale du pari de Kelly pour des données continues nécessite
+une variance proxy \emph{connue ou conservative}. Lorsque cette variance
+est estimée empiriquement à chaque pas (cas de notre implémentation), la
+garantie formelle ne tient plus strictement, et notre configuration
+suffit à exhiber ce dépassement. Le pari obtient certes le meilleur TPR
+($0{,}980$), mais ce gain marginal s'achète au prix d'un FDR non
+contrôlé.
+
+\textbf{NM-M2}, dont la Section~\ref{sec:cadre} (2.7) ne reconnaissait
+qu'une validité empirique, respecte au contraire largement le contrôle
+($0{,}005 \ll 0{,}05$) tout en obtenant un TPR quasi-identique au pari
+($0{,}975$). \textbf{JJ (LIL)} reste le plus conservateur : sa borne
+plus large ralentit significativement la détection ($\text{TPR}=0{,}890$)
+mais offre la marge la plus confortable ($\text{FDR}=0{,}004$).
+Cette inversion entre statut formel et performance empirique illustre
+l'avertissement de la Section~\ref{sec:cadre} (2.7) : le statut formel
+d'une borne ne garantit pas son comportement en pratique lorsque ses
+hypothèses sous-jacentes (variance connue, indépendance) ne sont pas
+strictement satisfaites. Pour l'application aux données réelles
+présentée dans la suite, nous retiendrons donc \textbf{NM-M2} comme
+choix de référence — meilleur compromis empirique entre vitesse et
+contrôle — et JJ comme fallback conservateur lorsqu'une marge de
+sécurité plus confortable est souhaitée.
+
+
+
+\subsection{Résultat sur les données réelles}
+
+\subsubsection{Présentation du jeu de données réelles}
+
+Nous disposons de 4 jeux de données pour tester nos algorithmes. 
+Le premier se nomme Effort et caractérise une expérience menée sur des employés d'un entrepot amazon divisés en 60 groupes et qu'on a fait appuyer sur deux touches autant de fois que possible durant un certain temps. Seul un groupe était payé pour au nombre de clics. LE but de ce jeu de donnée est de déterminer la facilité de l'algorithme à trouver un positif parmis de nombreux négatifs.
+Le second se nomme Exercise et décrit une les résultats de différentes politiques menées pour inciter les clients d'une salle de sport à venir s'entrainer plus régulièrement.
+Les troisième et quatrième jeux de données, respectivement Penn et Walmart, correspondent à des expériences d’incitation à la vaccination. Dans ces expériences, plusieurs formulations de messages sont testées afin d’identifier celles qui convainquent le plus efficacement les participants de se faire vacciner.
+
+\subsubsection{Analyse statistique du jeu de données réelles}
+
+Avant de comparer les algorithmes bandit, nous présentons une analyse statistique classique des quatre jeux de données réelles. Tous nos graphiques sont présents en annexe figure 12, 13, 14 et 15. 
+La méthode retenue est celle de Milkman et al.~\cite{milkman2021nature} : tests $t$ bilatéraux pour chaque bras traitement contre le contrôle (données continues) ou tests de Fisher exacts (données binaires), suivis d'une correction de Benjamini-Hochberg (BH) pour contrôler le taux de fausses découvertes à $\text{FDR} \leq 5\%$. Les bras significatifs ($q < 0{,}05$) apparaissent en vert, le bras contrôle en rouge, et les bras non significatifs en bleu.
+
+\paragraph{Données Effort.}
+
+
+
+Le jeu de données Effort comprend 60 bras (59 traitements + 1 contrôle). Le contrôle présente une moyenne d'environ 512 unités d'effort (ligne rouge pointillée). Après correction BH, la grande majorité des bras traitement sont significativement supérieurs au contrôle, dont beaucoup au seuil $q < 0{,}001$ (***). Seuls deux bras (en bleu) ne présentent pas de différence significative. L'amplitude des effets est importante : les meilleurs bras dépassent 900 unités d'effort, soit un gain d'environ $+75\%$ par rapport au contrôle.
+
+\paragraph{Données Exercise.}
+
+
+
+Le jeu de données Exercise comporte 54 bras (53 traitements + 1 contrôle). Le bras contrôle affiche une moyenne de $0{,}07$, correspondant à environ 7\% du volume d'exercice déclaré par les participants. La plupart des bras traitement sont significativement supérieurs au contrôle ($q < 0{,}001$, ***), avec des moyennes allant jusqu'à $0{,}37$. Quelques bras isolés (en bleu) restent non significatifs, notamment ceux associés à des récompenses variables ou à des conseils professionnels non contraignants. Ces résultats suggèrent que la majorité des interventions testées augmentent significativement l'activité physique déclarée.
+
+\paragraph{Données Penn.}
+
+
+
+Le jeu de données Penn porte sur l'incitation à la vaccination antigrippale à l'Université de Pennsylvanie. Le contrôle (\textit{Usual care}, bras 16) présente un taux de vaccination de $41{,}8\%$ ($n \approx 2389$). Les 19 bras traitements varient entre $42\%$ et $46{,}7\%$, des écarts très faibles en valeur absolue. Après correction BH, un seul bras est significatif : le bras 5 (\textit{Flu shot reserv}) à $46{,}7\%$ ($q < 0{,}05$, *). Ce résultat illustre la difficulté à détecter des effets faibles même avec des échantillons de $n \approx 2300$ par bras : le contraste inter-bras est trop limité pour que la correction BH préserve la significativité au-delà d'un seul bras.
+
+\paragraph{Données Walmart.}
+
+
+Le jeu de données Walmart porte sur l'incitation à la vaccination en pharmacie. Le contrôle (bras 3) affiche un taux de vaccination de $29{,}4\%$ ($n \approx 27\,523$). Les 22 bras traitements présentent des taux compris entre $30\%$ et $32\%$, soit des gains modestes de 1 à 3 points de pourcentage. Grâce aux très grands effectifs ($n > 27\,000$ par bras), tous les bras sont significatifs après correction BH : 20 bras sur 22 atteignent $q < 0{,}001$ (***), un bras $q < 0{,}01$ (**) et deux bras $q < 0{,}05$ (*). Ce résultat contraste nettement avec Penn : à effets absolus comparables, la puissance statistique conférée par des échantillons massifs permet de détecter des différences que Penn ne pouvait révéler. Cela soulève la question de la pertinence pratique (\textit{significance} statistique vs. significativité clinique) : un gain de $+1{,}5$ point de vaccination est statistiquement robuste à cette échelle, mais son impact décisionnel reste à apprécier.
+
+\subsubsection{Comparaison des résultats des 3 algorithmes}
+
+\subsubsection*{Algorithme JJ}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_simple/effort/figure1.png}
+        \caption{Données Effort.}
+        \label{fig:betting_effort}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_simple/exercise/figure1.png}
+        \caption{Données Exercise.}
+        \label{fig:betting_exercise}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_simple/penn/figure1.png}
+        \caption{Données Penn.}
+        \label{fig:betting_penn}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_simple/walmart/figure1.png}
+        \caption{Données Walmart.}
+        \label{fig:betting_walmart}
+    \end{subfigure}
+
+    \caption{Vitesse de découverte des positifs pour l'algorithme Betting
+             sur les quatre jeux de données réelles.}
+    \label{fig:betting_real_data}
+\end{figure}
+
+\subsubsection*{Algorithme nm\_m2}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v2/effort/figure1.png}
+        \caption{Données Effort.}
+        \label{fig:nm_m2_effort}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v2/exercise/figure1.png}
+        \caption{Données Exercise.}
+        \label{fig:nm_m2_exercise}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v2/penn/figure1.png}
+        \caption{Données Penn.}
+        \label{fig:nm_m2_penn}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v2/walmart/figure1.png}
+        \caption{Données Walmart.}
+        \label{fig:nm_m2_walmart}
+    \end{subfigure}
+
+    \caption{Vitesse de découverte des positifs pour l'algorithme nm\_m2
+             sur les quatre jeux de données réelles.}
+    \label{fig:nm_m2_real_data}
+\end{figure}
+
+\subsubsection*{Algorithme Betting}
+
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v3/effort/figure1.png}
+        \caption{Données Effort.}
+        \label{fig:betting_effort}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v3/exercise/figure1.png}
+        \caption{Données Exercise.}
+        \label{fig:betting_exercise}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v3/penn/figure1.png}
+        \caption{Données Penn.}
+        \label{fig:betting_penn}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{graphes_section5/figure_real_data_v3/walmart/figure1.png}
+        \caption{Données Walmart.}
+        \label{fig:betting_walmart}
+    \end{subfigure}
+
+    \caption{Vitesse de découverte des positifs pour l'algorithme Betting
+             sur les quatre jeux de données réelles.}
+    \label{fig:betting_real_data}
+\end{figure}
+
+% =========================================================
+\section{Discussion et Limites}
+\label{sec:discussion}
+
+\begin{itemize}
+  \item e-value/e-process
+  \item conditions suffisantes au fonctionnement de l'algorithme
+  \item problème du controle qui varie (on aura jamais de mu0 fixe dans JJ)
+  \item on observe une grosse différence entre algo validé empiriquement et algo validé mathématiquement
+  \item idée de test: rajouter plus de faux positifs
+\end{itemize}
+
+% =========================================================
+
+% ---------------------------------------------------------
+\subsection{Conditions suffisantes au bon fonctionnement}
+% ---------------------------------------------------------
+
+L'avantage adaptatif n'est pas inconditionnel. Les simulations identifient
+trois conditions nécessaires~: un rapport signal/bruit $\Delta/\sigma$
+suffisant (l'avantage s'effondre à $\sigma = 2{,}0$), un horizon $T$
+proportionné à $n\Delta^{-2}\log(1/\delta)$, et une phase d'initialisation
+d'au moins 10 observations par bras pour stabiliser $\hat{\rho}$.
+Sur données réelles, Penn illustre le cas limite~: les effets ($<5$ points
+de pourcentage entre bras) sont trop faibles pour que l'allocation adaptative
+apporte quoi que ce soit au-delà de ce que permet l'analyse classique.
+
+% ---------------------------------------------------------
+\subsection{Le problème du $\mu_0$ variable}
+% ---------------------------------------------------------
+
+Le Théorème~1 de Jamieson \& Jain~\cite{jamieson2019} suppose $\mu_0$
+connu et fixe. En mode bi-échantillon, nous le remplaçons par
+$\hat{\mu}_{c,t}$, estimé séquentiellement~: le seuil devient aléatoire,
+et la sub-uniformité des p-values nulles n'est plus garantie au sens
+finite-sample. L'approximation reste raisonnable lorsque le contrôle est
+rapidement bien estimé (ce que confirment nos simulations), mais constitue
+une limite théorique formelle. La solution rigoureuse est d'utiliser
+directement une martingale de pari sur le contraste apparié
+$D_t = X_{i,t} - X_{c,t}$~: aucune estimation de $\mu_c$ n'est alors
+nécessaire, et la garantie est restaurée, c'est le comportement de notre
+branche Bernoulli.
+
+% ---------------------------------------------------------
+\subsection{Écart entre validité formelle et performance empirique}
+% ---------------------------------------------------------
+
+
+% ---------------------------------------------------------
+\subsection{Vers les e-valeurs}
+% ---------------------------------------------------------
+
+Une extension naturelle est le cadre des \textbf{e-valeurs}~: des variables
+$E \geq 0$ telles que $\mathbb{E}[E] \leq 1$ sous $H_0$, combinables par
+multiplication. Nos martingales de pari produisent déjà des e-processus
+au sens de Wang \& Ramdas~\cite{wang2022}, qui montrent que BH appliqué
+à des e-valeurs contrôle le FDR sous dépendance \emph{arbitraire} entre
+bras, résolvant directement le problème de dépendance induit par le bras
+de contrôle partagé (Section~\ref{sec:cadre}). Cette reformulation
+permettrait également de traiter plus rigoureusement le cas du pari
+continu avec variance empirique, qui reste un problème ouvert.
+
+% =========================================================
+
+% Contenu a rediger.
+
+% =========================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% =========================================================
+
+
+% =========================================================
+%  BIBLIOGRAPHY
+% =========================================================
+\newpage
+\begin{thebibliography}{99}
+
+\bibitem{jamieson2019}
+Jamieson, K.~G., \& Jain, L.\ (2019).
+\textit{A Bandit Approach to Multiple Testing with False Discovery Control}.
+NeurIPS 2018. arXiv:1809.02235.
+
+\bibitem{benjamini1995}
+Benjamini, Y., \& Hochberg, Y.\ (1995).
+\textit{Controlling the false discovery rate: a practical and powerful approach
+to multiple testing}.
+J.\ Roy.\ Stat.\ Soc.\ B, 57(1), 289--300.
+
+\bibitem{howard2021}
+Howard, S.~R., Ramdas, A., McAuliffe, J., \& Sekhon, J.\ (2021).
+\textit{Time-uniform, nonparametric, nonasymptotic confidence sequences}.
+Ann.\ Statist., 49(2), 1055--1080.
+
+\bibitem{welford1962}
+Welford, B.~P.\ (1962).
+\textit{Note on a method for calculating corrected sums of squares and products}.
+Technometrics, 4(3), 419--420.
+
+\bibitem{milkman2021nature}
+Milkman, K.~L.\ et al.\ (2021).
+\textit{Megastudies improve the impact of applied behavioural science}.
+Nature, 600(7889), 478--483.
+
+\bibitem{milkman2021pnas}
+Milkman, K.~L.\ et al.\ (2021).
+\textit{A megastudy of text-based nudges encouraging patients to get vaccinated}.
+PNAS, 118(20), e2101165118.
+
+\bibitem{milkman2022pnas}
+Milkman, K.~L.\ et al.\ (2022).
+\textit{A 680,000-person megastudy of nudges to encourage vaccination in pharmacies}.
+PNAS, 119(6), e2115126119.
+
+\bibitem{johari2022}
+Johari, R., Koomen, P., Pekelis, L., \& Walsh, D.\ (2022).
+\textit{Always valid inference: Continuous monitoring of A/B tests}.
+Operations Research, 70(3), 1806--1821.
+
+\bibitem{wang2022}
+Wang, R., \& Ramdas, A.\ (2022).
+\textit{False discovery rate control with e-values}.
+J.\ Roy.\ Stat.\ Soc.\ B, 84(3), 822--852.
+
+\bibitem{audibert2010}
+Audibert, J.-Y., Bubeck, S., \& Munos, R.\ (2010).
+\textit{Best arm identification in multi-armed bandits}.
+COLT 2010.
+
+\bibitem{kasy2021}
+Kasy, M., \& Sautmann, A.\ (2021).
+\textit{Adaptive treatment assignment in experiments for policy choice}.
+Econometrica, 89(1), 113--132.
+
+\bibitem{bowen2022}
+Bowen, D., Green, E., \& Simmons, J.\ (2022).
+\textit{Making megastudies more effective}.
+Wharton School Preprint.
+
+\bibitem{ville1939}
+Ville, J.\ (1939).
+\textit{\'Etude critique de la notion de collectif}.
+Gauthier-Villars, Paris.
+
+\bibitem{waudbysmith2021}
+Waudby-Smith, I., \& Ramdas, A.\ (2023).
+\textit{Estimating means of bounded random variables by betting}.
+J.\ Roy.\ Stat.\ Soc.\ B, 85(1), 1--27. arXiv:2010.09686.
+
+\bibitem{benjamini2001}
+Benjamini, Y., \& Yekutieli, D.\ (2001).
+\textit{The control of the false discovery rate in multiple
+testing
+under dependency}.
+Ann.\ Statist., 29(4), 1165--1188.
+
+\end{thebibliography}
+
+\clearpage
+\appendix
+
+\section*{Annexe - Simulateur intéractif}
+Un simulateur interactif a été développé en Python (avec Streamlit) pour accompagner ce projet. Il permet de reproduire et d'explorer les expériences de la Section 4 : l'utilisateur configure les paramètres ($n$, $\delta$,$\sigma$, $\Delta$, horizon) via une interface graphique, lance les simulations et visualise en temps réel les courbes TPR, la répartition des tirages, les p-values anytime et les métriques FDR/TPR réels (ces dernières uniquement en simulation, la vérité terrain $H_1$ étant connue). 
+
+\medskip
+\noindent\textbf{Lancer le simulateur localement :}
+\begin{verbatim}
+git clone https://github.com/Chams22/bandit_approach_simulation
+cd bandit_approach_simulation
+pip install -r requirements.txt
+streamlit run streamlit_visu/app_bandit.py
+\end{verbatim}
+
+\section*{Annexe - Visualisation supplémentaire}
+Les figures suivantes complètent l'étude de simulation de la Section~4 en
+apportant deux niveaux d'information supplémentaires.
+
+Les \textbf{spaghetti plots} (Figures~\ref{fig:spag_petit}--\ref{fig:spag_grand})
+représentent les trajectoires individuelles de chaque simulation plutôt que
+la moyenne : ils permettent d'évaluer la \textit{variabilité} de l'algorithme adaptatif et de vérifier que le gain observé sur le TPR moyen n'est pas le fait de quelques simulations atypiques.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{annexe/spag_petit.png}
+    \caption{Spaghetti plot — Algorithme Adaptatif, $\sigma = 0{,}1$,
+             $\delta = 0{,}05$, $T = 800$, 50 simulations.}
+    \label{fig:spag_petit}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{annexe/spag_grand.png}
+    \caption{Spaghetti plot — Algorithme Adaptatif, $\sigma = 2{,}0$,
+             $\delta = 0{,}05$, $T = 800$, 50 simulations.}
+    \label{fig:spag_grand}
+\end{figure}
+
+Les \textbf{courbes de p-values anytime} (Figure~\ref{}) illustrent
+le mécanisme de décision de la procédure BH à chaque instant $t$ : on observe que les p-values des bras positifs ($i \in H_1$) décroissent rapidement vers zéro sous l'allocation adaptative, tandis que celles des bras nuls ($i \in H_0$) restent proches de 1, ce qui rend la séparation plus nette et les découvertes plus précoces.
+
+\section{Annexe - Statistiques classiques des jeux de données réelles}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.4\textwidth]{graphes_section5/figure_real_data_v2/effort/figure0.png}
+  \caption{Comparaison des bras traitements vs. contrôle — données \textit{Effort} (test $t$ + correction BH). Les barres vertes indiquent $q < 0{,}05$ ; les barres bleues une absence de significativité.}
+  \label{fig:figure0_effort}
+\end{figure}
+
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.4\textwidth]{graphes_section5/figure_real_data_v2/exercise/figure0.png}
+  \caption{Comparaison des bras traitements vs. contrôle — données \textit{Exercise} (test $t$ + correction BH).}
+  \label{fig:figure0_exercise}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{graphes_section5/figure_real_data_v2/penn/figure0.png}
+  \caption{Comparaison des bras traitements vs. contrôle — données \textit{Penn} (test de Fisher exact + correction BH). Seul le bras 5 (\textit{Flu shot reserv}) est significatif ($q < 0{,}05$, *).}
+  \label{fig:figure0_penn}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{graphes_section5/figure_real_data_v2/walmart/figure0.png}
+  \caption{Comparaison des bras traitements vs. contrôle — données \textit{Walmart} (test de Fisher exact + correction BH). Quasi-totalité des bras significatifs ($q < 0{,}001$, ***).}
+  \label{fig:figure0_walmart}
+\end{figure}
+
+
+\end{document}
