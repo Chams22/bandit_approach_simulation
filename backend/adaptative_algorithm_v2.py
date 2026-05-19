@@ -1,5 +1,13 @@
 import numpy as np
+import hashlib
 from tqdm import tqdm
+
+
+def _deterministic_bootstrap_observation(arm_data, bootstrap_key, no_sim, arm, pull_index):
+    raw = f"{bootstrap_key}|{no_sim}|{arm}|{pull_index}".encode("utf-8")
+    idx = int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big") % len(arm_data)
+    return arm_data[idx]
+
 
 # -----------------------------------------------------------------------------
 # Fused V2 for Continuous or Binary Data
@@ -181,6 +189,12 @@ class JamiesonJainAlgo:
                     for rank in range(k):
                         self.S_t.add(p_values_with_idx[rank][1])
                     break
+        else:
+            self.S_t.update(_two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            ))
 
     # -------------------------------------------------------------------------
     # Arm selection (UCB)
@@ -338,6 +352,12 @@ class UniformAlgo:
                     for rank in range(k):
                         self.S_t.add(p_values_with_idx[rank][1])
                     break
+        else:
+            self.S_t.update(_two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            ))
     def _update_stats(self, arm_idx, observation):
         """Same update logic as JamiesonJainAlgo."""
         n = self.counts[arm_idx]
@@ -435,7 +455,10 @@ def _should_record_history(step, horizon, history_record_every):
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                            control_arm, init_nb, init_choice, variable_mu_choice,
                            n_arms, is_true_mean, true_positives,
-                           history_record_every=1):
+                           history_record_every=1,
+                           stop_when_all_non_control_found=False,
+                           stop_control_arm=None,
+                           deterministic_bootstrap_key="default"):
     """
     Runs a single simulation for a given algorithm instance.
     Uses sequential data access (not bootstrap) for fair comparison.
@@ -445,6 +468,36 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     run_pr = []
     bootstrap_start_times = {}
     history_record_every = max(1, int(history_record_every))
+    stop_target_arms = set(range(n_arms))
+    if stop_control_arm is not None:
+        stop_target_arms.discard(int(stop_control_arm))
+
+    def all_stop_targets_found():
+        return (
+            stop_when_all_non_control_found
+            and stop_target_arms.issubset({int(arm) for arm in algo.S_t})
+        )
+
+    def fill_remaining(current_done):
+        remaining_steps = horizon - current_done
+        if remaining_steps <= 0:
+            return
+        if is_true_mean:
+            nb_found = len(algo.S_t.intersection(true_positives))
+            last_pr = nb_found / len(true_positives) if true_positives else 1.0
+        else:
+            last_pr = len(algo.S_t)
+        run_pr.extend([last_pr] * remaining_steps)
+
+        last_counts = algo.counts_evolution[-1] if algo.counts_evolution else algo.counts.copy()
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                algo.counts_evolution.append(last_counts.copy())
+
+        last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                p_values_list.append(list(last_p_values))
 
     # --- Init ---
     if init_choice:
@@ -458,6 +511,9 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             algo.counts_evolution = [algo.counts.copy()]
 
     discovery_times = {int(arm): 0 for arm in algo.S_t}
+    if all_stop_targets_found():
+        fill_remaining(0)
+        return run_pr, p_values_list, discovery_times, bootstrap_start_times
 
     # --- Main loop ---
     for t in range(0, horizon):
@@ -474,25 +530,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
 
         if arm == "stop":
             print("stop triggered")
-            current_done = len(run_pr)
-            remaining_steps = horizon - current_done
-
-            if is_true_mean:
-                nb_found = len(algo.S_t.intersection(true_positives))
-                last_pr = nb_found / len(true_positives) if true_positives else 1.0
-            else:
-                last_pr = len(algo.S_t)
-            run_pr.extend([last_pr] * remaining_steps)
-
-            last_counts = algo.counts_evolution[-1]
-            for step in range(current_done + 1, horizon + 1):
-                if _should_record_history(step, horizon, history_record_every):
-                    algo.counts_evolution.append(last_counts.copy())
-
-            last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
-            for step in range(current_done + 1, horizon + 1):
-                if _should_record_history(step, horizon, history_record_every):
-                    p_values_list.append(list(last_p_values))
+            fill_remaining(len(run_pr))
             break
 
         else:
@@ -501,7 +539,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             len_arm = len(all_arm_data[no_sim][arm])
             if all_arm_counts[arm] >= len_arm:
                 bootstrap_start_times.setdefault(int(arm), current_step)
-                observation = np.random.choice(all_arm_data[no_sim][arm]) 
+                observation = _deterministic_bootstrap_observation(
+                    all_arm_data[no_sim][arm],
+                    deterministic_bootstrap_key,
+                    no_sim,
+                    arm,
+                    all_arm_counts[arm],
+                )
             else:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
 
@@ -524,13 +568,20 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 nb_found = len(algo.S_t)
                 run_pr.append(nb_found)
 
+            if all_stop_targets_found():
+                fill_remaining(current_step)
+                break
+
     return run_pr, p_values_list, discovery_times, bootstrap_start_times
 
 
 def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
                    control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
                    rho=0.01, cs_type='normal_mixture', return_discovery_times=False,
-                   return_bootstrap_times=False, history_record_every=1):
+                   return_bootstrap_times=False, history_record_every=1,
+                   stop_when_all_non_control_found=False,
+                   stop_control_arm=None,
+                   deterministic_bootstrap_key="default"):
     """
     Runs the bandit experiment.
 
@@ -615,7 +666,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         run_pr, p_values_list, discovery_times, bootstrap_start_times = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice,
-            n_arms, is_true_mean, true_positives, history_record_every
+            n_arms, is_true_mean, true_positives, history_record_every,
+            stop_when_all_non_control_found=stop_when_all_non_control_found,
+            stop_control_arm=control_arm if stop_control_arm is None else stop_control_arm,
+            deterministic_bootstrap_key=deterministic_bootstrap_key,
         )
 
         list_positive.append(algo.S_t)

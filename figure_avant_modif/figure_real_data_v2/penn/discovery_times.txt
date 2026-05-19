@@ -1,0 +1,10 @@
+First discovery time by simulation and arm
+
+   UNIF
+1. {5: 40602}
+   UNIF VAR
+1. {}
+   ADAPT
+1. {2: 30638, 4: 26262, 5: 17590, 7: 43700, 8: 41592, 11: 40195, 14: 35768, 17: 34731}
+   ADAPT VAR
+1. {5: 29196}
