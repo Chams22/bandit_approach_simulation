@@ -493,8 +493,8 @@ def plot_spaghetti(counts_list_adapt, counts_adapt_mean, true_means, mu_0, n_sim
 
 
 def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
-                    variable_mu_choice=False, control_arm=None):
-    col1, col2, col3, col4 = st.columns(4)
+                    variable_mu_choice=False, control_arm=None, delta=None, sigma=None):
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     tpr_90_adapt = int(np.argmax(tpr_adapt >= 0.9)) if np.any(tpr_adapt >= 0.9) else len(tpr_adapt)
     tpr_90_unif = int(np.argmax(tpr_unif >= 0.9)) if np.any(tpr_unif >= 0.9) else len(tpr_unif)
@@ -523,6 +523,28 @@ def display_metrics(tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
     gain = ((tpr_90_unif - tpr_90_adapt) / tpr_90_unif * 100) if tpr_90_unif > 0 else 0
     with col4:
         st.metric("Gain d'efficacité", f"{gain:.1f}%")
+
+    # AUC difference: area between adaptive and uniform TPR curves (normalised to [0,1])
+    auc_adapt = float(np.trapz(tpr_adapt)) / len(tpr_adapt)
+    auc_unif = float(np.trapz(tpr_unif)) / len(tpr_unif)
+    delta_auc = auc_adapt - auc_unif
+    with col5:
+        st.metric("ΔAUC (adapt − unif)", f"{delta_auc:+.3f}")
+
+    # Cohen's D = delta / sigma (min effect over H1 arms, or using provided delta)
+    if sigma is not None and sigma > 0:
+        if delta is not None:
+            cohens_d = delta / sigma
+        elif good_arms:
+            ref_val = true_means[int(control_arm)] if (variable_mu_choice and control_arm is not None) else mu_0
+            cohens_d = min((true_means[i] - ref_val) / sigma for i in good_arms)
+        else:
+            cohens_d = float('nan')
+        with col6:
+            st.metric("D de Cohen (δ/σ)", f"{cohens_d:.3f}" if not np.isnan(cohens_d) else "N/A")
+    else:
+        with col6:
+            st.metric("D de Cohen (δ/σ)", "N/A")
 
 def compute_fdr_metrics(list_positive, true_means, mu_0,
                         variable_mu_choice=False, control_arm=None):
@@ -969,25 +991,22 @@ def render_result_tabs(result, cfg, tab_prefix=""):
     display_metrics(
         tpr_adapt, tpr_unif, counts_adapt_mean, true_means, mu_0,
         variable_mu_choice=variable_mu_choice, control_arm=control_arm,
+        delta=delta, sigma=sigma,
     )
-    st.caption("Bootstrap 95% CI over simulations: mean [low, high]. Gains are paired simulation-by-simulation.")
+    st.caption("Bootstrap 95% CI (mean [low, high], 95%, paired par simulation).")
     ci_cols = st.columns(4)
-    ci_cols[0].metric(
-        "Gain TPR CI",
-        _fmt_ci(bootstrap_summary["Gain TPR (Adapt - Uniform)"], digits=1, pct=True),
-    )
-    ci_cols[1].metric(
-        "Gain FDR CI",
-        _fmt_ci(bootstrap_summary["Gain FDR (Adapt - Uniform)"], digits=1, pct=True),
-    )
-    ci_cols[2].metric(
-        "Gain speed AUC CI",
-        _fmt_ci(bootstrap_summary["Gain speed AUC (Adapt - Uniform)"], digits=3),
-    )
-    ci_cols[3].metric(
-        "Gain TPR90 time CI",
-        _fmt_ci(bootstrap_summary["Gain TPR90 efficiency"], digits=1, pct=True),
-    )
+    _ci_items = [
+        ("Gain TPR CI",       _fmt_ci(bootstrap_summary["Gain TPR (Adapt - Uniform)"],       digits=1, pct=True)),
+        ("Gain FDR CI",       _fmt_ci(bootstrap_summary["Gain FDR (Adapt - Uniform)"],       digits=1, pct=True)),
+        ("Gain AUC vitesse",  _fmt_ci(bootstrap_summary["Gain speed AUC (Adapt - Uniform)"], digits=2)),
+        ("Gain TPR90 temps",  _fmt_ci(bootstrap_summary["Gain TPR90 efficiency"],            digits=1, pct=True)),
+    ]
+    for _col, (_label, _val) in zip(ci_cols, _ci_items):
+        _col.markdown(
+            f"<div style='font-size:0.75rem;color:#aaa;margin-bottom:2px'>{_label}</div>"
+            f"<div style='font-size:0.9rem;font-weight:600'>{_val}</div>",
+            unsafe_allow_html=True,
+        )
     if variable_mu_choice:
         st.caption(
             f"Cadre statistique : contrôle online / var, référence = bras {int(control_arm)} "
@@ -1242,7 +1261,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Configuration des bras")
-    n_arms = st.number_input("Nombre de bras", min_value=2, max_value=10, value=3, step=1)
+    n_arms = st.number_input("Nombre de bras", min_value=2, max_value=20, value=3, step=1)
 
     control_arm = st.number_input(
         "Indice du bras de contrôle", min_value=0, max_value=int(n_arms) - 1,
@@ -1485,10 +1504,16 @@ with st.expander("🗄️ Historique local des simulations"):
         if len(catalog) == 0:
             st.info("Catalogue vide.")
         else:
+            def _fmt_entry(x):
+                row = catalog.iloc[x]
+                date = row['date'] if 'date' in catalog.columns else '—'
+                name = row['name'] if 'name' in catalog.columns else f'Simu #{x}'
+                return f"{date} - {name}"
+
             selected_idx = st.selectbox(
                 "Sélectionnez une simulation à recharger :",
                 options=catalog.index,
-                format_func=lambda x: f"{catalog.iloc[x]['date']} - {catalog.iloc[x]['name']}",
+                format_func=_fmt_entry,
                 key="history_select",
             )
             if st.button("Charger et afficher les graphiques", key="history_load"):
