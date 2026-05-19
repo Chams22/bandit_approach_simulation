@@ -237,20 +237,20 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
 
     # Uniform
     (tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif,
-     np_p_value_list_unif, pvalues_unif_mean, l_pos_unif) = \
+     np_p_value_list_unif, pvalues_unif_mean, l_pos_unif, disc_times_unif) = \
         algo_module.run_experiment(
             true_means, mu_0, delta, horizon, 'uniform',
             all_arm_data, n_sims, control_arm, init_nb, init_choice,
-            variable_mu_choice, True,
+            variable_mu_choice, True, return_discovery_times=True,
         )
 
     # Adaptive
     (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
-     np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt) = \
+     np_p_value_list_adapt, pvalues_adapt_mean, l_pos_adapt, disc_times_adapt) = \
         algo_module.run_experiment(
             true_means, mu_0, delta, horizon, 'adaptive',
             all_arm_data, n_sims, control_arm, init_nb, init_choice,
-            variable_mu_choice, True,
+            variable_mu_choice, True, return_discovery_times=True,
         )
 
     return {
@@ -266,6 +266,8 @@ def run_single_experiment(cfg, dist_type, algo_module=None):
         'pvalues_unif_mean': pvalues_unif_mean,
         'l_pos_adapt': l_pos_adapt,
         'l_pos_unif':  l_pos_unif,
+        'disc_times_adapt': disc_times_adapt,
+        'disc_times_unif':  disc_times_unif,
     }
 
 
@@ -281,16 +283,16 @@ def _run_backend_on_prepared_data(cfg, algo_module, all_arm_data):
     variable_mu_choice = cfg.get('variable_mu_choice', False)
 
     (tpr_unif, tpr_list_unif, counts_unif_mean, counts_list_unif,
-     _, pvalues_unif_mean, l_pos_unif) = algo_module.run_experiment(
+     _, pvalues_unif_mean, l_pos_unif, disc_times_unif) = algo_module.run_experiment(
         true_means, mu_0, delta, horizon, 'uniform',
         all_arm_data, n_sims, control_arm, init_nb, init_choice,
-        variable_mu_choice, True,
+        variable_mu_choice, True, return_discovery_times=True,
     )
     (tpr_adapt, tpr_list_adapt, counts_adapt_mean, counts_list_adapt,
-     _, pvalues_adapt_mean, l_pos_adapt) = algo_module.run_experiment(
+     _, pvalues_adapt_mean, l_pos_adapt, disc_times_adapt) = algo_module.run_experiment(
         true_means, mu_0, delta, horizon, 'adaptive',
         all_arm_data, n_sims, control_arm, init_nb, init_choice,
-        variable_mu_choice, True,
+        variable_mu_choice, True, return_discovery_times=True,
     )
 
     return {
@@ -306,6 +308,8 @@ def _run_backend_on_prepared_data(cfg, algo_module, all_arm_data):
         'pvalues_unif_mean': pvalues_unif_mean,
         'l_pos_adapt': l_pos_adapt,
         'l_pos_unif': l_pos_unif,
+        'disc_times_adapt': disc_times_adapt,
+        'disc_times_unif':  disc_times_unif,
     }
 
 
@@ -940,6 +944,109 @@ def render_algorithm_comparison(comparison_payload, cfg):
     with tabs[4]:
         st.dataframe(summary_df, use_container_width=True)
 
+def plot_detection_order(disc_times_adapt, disc_times_unif, true_means, mu_0,
+                         variable_mu_choice=False, control_arm=None, horizon=None):
+    """
+    Box-plot des temps de première détection par bras, adapt vs uniform.
+    disc_times_* : liste de dicts {arm_idx: first_detection_timestep} (une par simulation).
+    Bras non détectés dans une simulation → temps = horizon+1 (symbolise 'jamais').
+    """
+    n_arms = len(true_means)
+    sentinel = (horizon + 1) if horizon else 9999
+
+    rows = []
+    for algo_label, dt_list in [("Adaptive", disc_times_adapt), ("Uniform", disc_times_unif)]:
+        for dt in dt_list:
+            for arm in range(n_arms):
+                t = dt.get(arm, sentinel)
+                if variable_mu_choice and control_arm is not None and arm == int(control_arm):
+                    continue
+                rows.append({"Bras": f"Bras {arm}\n(μ={true_means[arm]:.2f})",
+                             "arm_idx": arm,
+                             "Algorithme": algo_label,
+                             "Temps détection": t})
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+
+    # Trier les bras par médiane de détection (adaptive)
+    order_df = (df[df["Algorithme"] == "Adaptive"]
+                .groupby("arm_idx")["Temps détection"].median()
+                .sort_values())
+    arm_order = [f"Bras {i}\n(μ={true_means[i]:.2f})" for i in order_df.index]
+
+    fig, ax = plt.subplots(figsize=(max(8, n_arms * 1.4), 5))
+    colors = {"Adaptive": "#e07b39", "Uniform": "#4c8fdb"}
+    positions_base = np.arange(len(arm_order))
+    width = 0.3
+
+    # Précalculer les médianes et rangs par algo pour les annotations
+    medians = {}
+    ranks = {}
+    for algo, dt_list in [("Adaptive", disc_times_adapt), ("Uniform", disc_times_unif)]:
+        med = {}
+        for lbl in arm_order:
+            arm_idx = int(lbl.split("\n")[0].replace("Bras ", ""))
+            vals = [d.get(arm_idx, sentinel) for d in dt_list]
+            med[lbl] = float(np.median(vals))
+        sorted_lbls = sorted(med, key=lambda l: med[l])
+        ranks[algo] = {lbl: i + 1 for i, lbl in enumerate(sorted_lbls)}
+        medians[algo] = med
+
+    for offset, algo in zip([-width / 2, width / 2], ["Adaptive", "Uniform"]):
+        sub = df[df["Algorithme"] == algo]
+        data_by_arm = [sub[sub["Bras"] == lbl]["Temps détection"].values for lbl in arm_order]
+        bp = ax.boxplot(
+            data_by_arm,
+            positions=positions_base + offset,
+            widths=width * 0.85,
+            patch_artist=True,
+            manage_ticks=False,
+            medianprops=dict(color="white", linewidth=2),
+        )
+        for patch in bp["boxes"]:
+            patch.set_facecolor(colors[algo])
+            patch.set_alpha(0.75)
+
+        # Annoter le rang médian au-dessus de chaque boîte
+        for pos, lbl, data in zip(positions_base + offset, arm_order, data_by_arm):
+            rank = ranks[algo][lbl]
+            top = float(np.percentile(data, 75)) if len(data) else medians[algo][lbl]
+            ax.text(
+                pos, top, f"#{rank}",
+                ha="center", va="bottom", fontsize=7.5, fontweight="bold",
+                color=colors[algo],
+            )
+
+    ax.set_xticks(positions_base)
+    ax.set_xticklabels(arm_order, fontsize=9)
+    ax.set_ylabel("Temps de première détection (t)")
+    ax.set_title("Ordre de détection des bras — Adaptive vs Uniform\n"
+                 "(trié par médiane adaptive; bras non détectés → t=horizon+1)")
+    ax.legend(
+        handles=[plt.Rectangle((0, 0), 1, 1, fc=colors[a], alpha=0.75) for a in ["Adaptive", "Uniform"]],
+        labels=["Adaptive", "Uniform"], loc="upper left",
+    )
+
+    # Ligne horizon
+    if horizon:
+        ax.axhline(sentinel, color="grey", linestyle=":", linewidth=1, label="Non détecté")
+
+    # Fond différent pour bras H1 vs H0
+    ref = true_means[int(control_arm)] if (variable_mu_choice and control_arm is not None) else mu_0
+    for pos, lbl in zip(positions_base, arm_order):
+        arm_idx = int(lbl.split("\n")[0].replace("Bras ", ""))
+        is_h1 = true_means[arm_idx] > ref
+        ax.axvspan(pos - 0.5, pos + 0.5, alpha=0.04,
+                   color="#00c000" if is_h1 else "#c00000")
+
+    ax.grid(True, axis="y", alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
 def render_result_tabs(result, cfg, tab_prefix=""):
     """Affiche tous les onglets de résultat pour un test donné.
 
@@ -1026,6 +1133,7 @@ def render_result_tabs(result, cfg, tab_prefix=""):
         "P-Values (grille)",
         "Bootstrap IC",
         "FDR — Découvertes",
+        "Ordre de détection",
     ])
 
     with tabs[0]:
@@ -1178,6 +1286,53 @@ def render_result_tabs(result, cfg, tab_prefix=""):
                 f"{' Le contrôle FDR est garanti.' if fdr_ok else '❌ Le contrôle FDR est violé.'}"
             )
             st.markdown("---")
+
+    with tabs[9]:
+        st.subheader("Ordre de détection des bras")
+        disc_adapt = result.get('disc_times_adapt')
+        disc_unif  = result.get('disc_times_unif')
+        if disc_adapt and disc_unif:
+            fig = plot_detection_order(
+                disc_adapt, disc_unif, true_means, mu_0,
+                variable_mu_choice=variable_mu_choice,
+                control_arm=control_arm,
+                horizon=horizon,
+            )
+            if fig:
+                st.pyplot(fig)
+                plt.close(fig)
+                st.caption(
+                    "Chaque boîte montre la distribution (sur les simulations) du temps auquel "
+                    "le bras a été détecté pour la première fois. Les bras non détectés dans une "
+                    "simulation sont placés à t = horizon+1. Fond vert = H1 (vrai positif), rouge = H0."
+                )
+
+                # Table récapitulative : rang médian de détection
+                sentinel = horizon + 1
+                ref = true_means[int(control_arm)] if (variable_mu_choice and control_arm is not None) else mu_0
+                rows_tab = []
+                arms_to_show = [i for i in range(n_arms)
+                                if not (variable_mu_choice and control_arm is not None and i == int(control_arm))]
+                for arm in arms_to_show:
+                    t_adapt = [d.get(arm, sentinel) for d in disc_adapt]
+                    t_unif  = [d.get(arm, sentinel) for d in disc_unif]
+                    rows_tab.append({
+                        "Bras": arm,
+                        "μ": f"{true_means[arm]:.3f}",
+                        "H1 ?": "✓" if true_means[arm] > ref else "✗",
+                        "Médiane adapt (t)": int(np.median(t_adapt)),
+                        "Médiane unif (t)":  int(np.median(t_unif)),
+                        "Rang adapt": None,
+                        "Rang unif": None,
+                    })
+                df_tab = pd.DataFrame(rows_tab)
+                df_tab["Rang adapt"] = df_tab["Médiane adapt (t)"].rank(method="min").astype(int)
+                df_tab["Rang unif"]  = df_tab["Médiane unif (t)"].rank(method="min").astype(int)
+                df_tab = df_tab.sort_values("Rang adapt")
+                st.dataframe(df_tab.set_index("Bras"), use_container_width=True)
+        else:
+            st.info("Relancez la simulation pour afficher l'ordre de détection.")
+
 # =============================================================================
 # PART 4: INITIALISATION DU SESSION STATE
 # =============================================================================
