@@ -57,8 +57,8 @@ EFFORT_BOOTSTRAP_SHORT_INIT_ARMS = os.environ.get(
 ).lower() not in {"0", "false", "no"}
 EFFORT_INIT_BOOTSTRAP_SEED = int(os.environ.get("REAL_DATA_EFFORT_INIT_BOOTSTRAP_SEED", "12345"))
 CACHE_FILENAME = "run_experiment_cache.pkl"
-CACHE_VERSION = 5
-SUPPORTED_CACHE_VERSIONS = {4, 5}
+CACHE_VERSION = 6
+SUPPORTED_CACHE_VERSIONS = {6}
 ALGORITHM_CONFIGS = {
     "simple": {
         "continuous_module": "adaptative_algorithm_jj",
@@ -214,12 +214,16 @@ def configure_from_interactive_input():
         not _env_falsey(os.environ.get("REAL_DATA_COMPARE_ALGOS", "1")),
     )
     default_stop_rule = os.environ.get("REAL_DATA_STOP_RULE", "horizon").lower()
-    if default_stop_rule != "horizon":
-        default_stop_rule = "adaptive"
+    if default_stop_rule in {"h", "horizon"}:
+        default_stop_rule = "h"
+    elif default_stop_rule in {"u", "uniform", "uniform_classic_all_non_control_arms"}:
+        default_stop_rule = "u"
+    else:
+        default_stop_rule = "a"
     stop_rule = _prompt_choice(
         "Stopping rule",
         default_stop_rule,
-        ["horizon", "adaptive"],
+        ["h", "a", "u"],
     )
     effort_init_override = _prompt_optional_int(
         "Effort initialization size override",
@@ -235,9 +239,11 @@ def configure_from_interactive_input():
     os.environ["REAL_DATA_SAVE_CACHE"] = "1" if save_cache else "0"
     os.environ["REAL_DATA_ONLY_COMPARISON"] = "0" if generate_classic_plots else "1"
     os.environ["REAL_DATA_COMPARE_ALGOS"] = "1" if generate_comparison else "0"
-    os.environ["REAL_DATA_STOP_RULE"] = (
-        "adaptive_classic_all_non_control_arms" if stop_rule == "adaptive" else "horizon"
-    )
+    os.environ["REAL_DATA_STOP_RULE"] = {
+        "h": "horizon",
+        "a": "adaptive_classic_all_non_control_arms",
+        "u": "uniform_classic_all_non_control_arms",
+    }[stop_rule]
     if effort_init_override is None:
         os.environ.pop("REAL_DATA_EFFORT_INIT_NB", None)
     else:
@@ -288,6 +294,7 @@ if invalid_datasets:
     )
 
 if STOP_RULE in {
+    "a",
     "adaptive",
     "adaptive_classic",
     "adaptive_all",
@@ -295,10 +302,26 @@ if STOP_RULE in {
     "adaptive_classic_all_positives",
 }:
     STOP_RULE = "adaptive_classic_all_non_control_arms"
-if STOP_RULE not in {"horizon", "adaptive_classic_all_non_control_arms"}:
+if STOP_RULE in {
+    "u",
+    "uniform",
+    "uniform_classic",
+    "uniform_all",
+    "uniform_classic_all",
+    "uniform_classic_all_positives",
+}:
+    STOP_RULE = "uniform_classic_all_non_control_arms"
+if STOP_RULE in {"h", "fixed"}:
+    STOP_RULE = "horizon"
+if STOP_RULE not in {
+    "horizon",
+    "adaptive_classic_all_non_control_arms",
+    "uniform_classic_all_non_control_arms",
+}:
     raise ValueError(
-        "Unknown REAL_DATA_STOP_RULE. Choose 'horizon' or "
-        "'adaptive_classic_all_non_control_arms' (interactive shortcut: adaptive)."
+        "Unknown REAL_DATA_STOP_RULE. Choose 'horizon', "
+        "'adaptive_classic_all_non_control_arms' (interactive shortcut: a), or "
+        "'uniform_classic_all_non_control_arms' (interactive shortcut: u)."
     )
 
 
@@ -505,6 +528,11 @@ def _truncate_adaptive_probe_results(probe_results, source_horizon, target_horiz
         discovery_times,
         bootstrap_times,
     )
+
+
+def _probe_results_as_run_results(probe_results):
+    """The stopping probe is already the definitive run for its own mode."""
+    return probe_results
 
 
 def _initialization_cost(init_nb, n_arms, init_choice=True):
@@ -1355,6 +1383,212 @@ def _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors
     plt.close()
 
 
+def _largest_common_pair_discovery_record(discovery_a, discovery_b, label_a, label_b,
+                                          dataset_key, comparison_label):
+    n_sims = min(len(discovery_a or []), len(discovery_b or []))
+    candidates = []
+    for sim_idx in range(n_sims):
+        prefixes_a = _discovery_prefixes(discovery_a[sim_idx])
+        prefixes_b = _discovery_prefixes(discovery_b[sim_idx])
+        common_k = set(prefixes_a).intersection(prefixes_b)
+        for k in common_k:
+            arms_a, time_a = prefixes_a[k]
+            arms_b, time_b = prefixes_b[k]
+            if arms_a != arms_b:
+                continue
+            candidates.append({
+                "dataset": dataset_key,
+                "comparison": comparison_label,
+                "simulation": sim_idx + 1,
+                "k": int(k),
+                "common_set": _format_arm_set(arms_a),
+                "common_set_tuple": arms_a,
+                f"{label_a}_time": float(time_a),
+                f"{label_b}_time": float(time_b),
+                "mean_time": float(np.mean([time_a, time_b])),
+                "delta_adaptive_minus_uniform": float(time_b - time_a),
+            })
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (-row["k"], row["mean_time"], row["simulation"]))
+    return candidates[0]
+
+
+def _load_algo_root_cache_payloads(output_root, dataset_keys):
+    cached = {}
+    messages = {}
+    for dataset_key in dataset_keys:
+        cache_path = Path(output_root) / dataset_key / CACHE_FILENAME
+        if not cache_path.exists():
+            messages[dataset_key] = f"Missing cache: {cache_path.name}"
+            continue
+        try:
+            cached[dataset_key] = load_experiment_cache(cache_path)
+        except Exception as exc:
+            messages[dataset_key] = f"Could not load cache: {exc}"
+    return cached, messages
+
+
+def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=None,
+                                                      payloads=None):
+    output_root = Path(output_root)
+    dataset_keys = _ordered_comparison_datasets(dataset_keys or DATASET_KEYS)
+    cached, messages = _load_algo_root_cache_payloads(output_root, dataset_keys)
+    if payloads:
+        cached.update(payloads)
+
+    rows = []
+    records = {}
+    for dataset_key in dataset_keys:
+        payload = cached.get(dataset_key)
+        if not payload:
+            records[dataset_key] = {"message": messages.get(dataset_key, "Missing cache.")}
+            continue
+
+        classic_record = _largest_common_pair_discovery_record(
+            payload.get("discovery_unif", []) or [],
+            payload.get("discovery_adapt", []) or [],
+            "uniform",
+            "adaptive",
+            dataset_key,
+            "Classic: Adaptive vs Uniform",
+        )
+        var_record = _largest_common_pair_discovery_record(
+            payload.get("discovery_unif_v", []) or [],
+            payload.get("discovery_adapt_v", []) or [],
+            "uniform",
+            "adaptive",
+            dataset_key,
+            "Online control: Adaptive Var vs Uniform Var",
+        )
+        records[dataset_key] = {
+            "Classic": classic_record,
+            "Var": var_record,
+            "message": None,
+        }
+        for record in [classic_record, var_record]:
+            if record is None:
+                continue
+            rows.append({
+                "dataset": record["dataset"],
+                "comparison": record["comparison"],
+                "simulation": record["simulation"],
+                "k": record["k"],
+                "common_set": record["common_set"],
+                "uniform_time": record["uniform_time"],
+                "adaptive_time": record["adaptive_time"],
+                "delta_adaptive_minus_uniform": record["delta_adaptive_minus_uniform"],
+            })
+
+    pd.DataFrame(rows).to_csv(
+        output_root / "figure10_same_set_adapt_vs_uniform.csv",
+        index=False,
+    )
+
+    ncols = 2
+    nrows = int(np.ceil(len(dataset_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(8.2 * ncols, 5.4 * nrows), squeeze=False)
+    flat_axes = axes.ravel()
+    mode_colors = {
+        "Uniform": "#9E9E9E",
+        "Adaptive": "#2E7D32",
+        "Uniform Var": "#B0B0B0",
+        "Adaptive Var": "#43A047",
+    }
+
+    for ax, dataset_key in zip(flat_axes, dataset_keys):
+        record_bundle = records.get(dataset_key, {})
+        if record_bundle.get("message"):
+            ax.axis("off")
+            ax.text(0.5, 0.5, record_bundle["message"],
+                    transform=ax.transAxes, ha="center", va="center",
+                    color="gray", wrap=True)
+            ax.set_title(f"{dataset_key.upper()} - missing data")
+            continue
+
+        specs = [
+            ("Classic", "Uniform", "Adaptive"),
+            ("Var", "Uniform Var", "Adaptive Var"),
+        ]
+        x_positions = []
+        values = []
+        colors = []
+        labels = []
+        annotations = []
+        group_centers = []
+
+        for group_idx, (record_key, uniform_label, adaptive_label) in enumerate(specs):
+            record = record_bundle.get(record_key)
+            center = group_idx * 3.0
+            group_centers.append(center + 0.4)
+            if record is None:
+                x_positions.extend([center, center + 0.8])
+                values.extend([np.nan, np.nan])
+                colors.extend(["#dddddd", "#dddddd"])
+                labels.extend([uniform_label, adaptive_label])
+                annotations.extend(["NA", "NA"])
+                continue
+
+            common_tuple = record["common_set_tuple"]
+            preview = ", ".join(str(arm) for arm in common_tuple[:7])
+            if len(common_tuple) > 7:
+                preview += ", ..."
+            x_positions.extend([center, center + 0.8])
+            values.extend([record["uniform_time"], record["adaptive_time"]])
+            colors.extend([mode_colors[uniform_label], mode_colors[adaptive_label]])
+            labels.extend([uniform_label, adaptive_label])
+            annotations.extend([
+                f"k={record['k']}\n{{{preview}}}",
+                f"Δ={record['delta_adaptive_minus_uniform']:+.0f}",
+            ])
+
+        finite_values = [value for value in values if np.isfinite(value)]
+        if not finite_values:
+            ax.axis("off")
+            ax.text(0.5, 0.5, "No identical discovered set between compared modes",
+                    transform=ax.transAxes, ha="center", va="center", color="gray", wrap=True)
+            ax.set_title(f"{dataset_key.upper()} - no common sets")
+            continue
+
+        bars = ax.bar(x_positions, np.nan_to_num(values, nan=0.0), color=colors,
+                      edgecolor="black", alpha=0.88, width=0.68)
+        y_max = max(finite_values)
+        for bar, value, annotation in zip(bars, values, annotations):
+            if not np.isfinite(value):
+                ax.text(bar.get_x() + bar.get_width() / 2, y_max * 0.04, "NA",
+                        ha="center", va="bottom", color="gray", fontsize=9)
+                continue
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                    f"{value:.0f}", ha="center", va="bottom", fontsize=8)
+            ax.text(bar.get_x() + bar.get_width() / 2, -0.12 * y_max,
+                    annotation, ha="center", va="top", fontsize=7, wrap=True)
+
+        ax.set_title(f"{dataset_key.upper()} - largest identical set per comparison")
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(labels, rotation=25, ha="right")
+        ax.set_ylabel("Discovery time for the same arm set")
+        ax.set_ylim(-0.28 * y_max, 1.18 * y_max)
+        ax.grid(axis="y", alpha=0.25)
+        for center in group_centers[:-1]:
+            ax.axvline(center + 1.1, color="#d0d0d0", linewidth=0.8)
+
+    for ax in flat_axes[len(dataset_keys):]:
+        ax.axis("off")
+
+    fig.suptitle(
+        "Figure 10 - Adaptive vs Uniform discovery time on the largest identical discovered set\n"
+        "Each dataset compares the classic pair and the online-control pair separately; lower bars are faster.",
+        fontsize=14,
+        fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.03, 1, 0.91))
+    figure_path = output_root / "figure10_same_set_adapt_vs_uniform.png"
+    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
+    plt.savefig(output_root / "figure10.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, output_dir):
     all_rows = []
     dataset_keys = _ordered_comparison_datasets(dataset_keys)
@@ -1764,6 +1998,7 @@ if __name__ == "__main__":
     # name_data="exercise"
     
     list_name=list(RUN_DATASETS)
+    local_algo_payloads = {}
     num_graph=0
     for name_data in list_name:
         print("***********************name of the database treated:", name_data.upper(), "***********************")
@@ -2086,6 +2321,7 @@ if __name__ == "__main__":
         experiment_cache_path = dataset_output_dir / CACHE_FILENAME
         cached_payload = None
         adaptive_classic_probe_results = None
+        uniform_classic_probe_results = None
 
         if USE_EXPERIMENT_CACHE and experiment_cache_path.exists():
             try:
@@ -2179,6 +2415,55 @@ if __name__ == "__main__":
                 )
             horizon = effective_horizon
 
+        if STOP_RULE == "uniform_classic_all_non_control_arms" and cached_payload is None:
+            print(
+                "Stopping rule: uniform classic must find every non-control arm as positive "
+                f"(cap={adaptive_stop_cap})."
+            )
+            runner_module = (
+                adaptative_algorithm_continuous
+                if type_de_loi == "normal"
+                else adaptative_algorithm_binary
+            )
+            uniform_classic_probe_results = runner_module.run_experiment(
+                arm_test,
+                mu_0_unif,
+                delta,
+                adaptive_stop_cap,
+                'uniform',
+                data_test,
+                n_sims,
+                control_arm,
+                init_nb,
+                init_choice,
+                False,
+                is_true_mean,
+                return_discovery_times=True,
+                return_bootstrap_times=True,
+                history_record_every=HISTORY_RECORD_EVERY,
+                deterministic_bootstrap_key=name_data,
+                stop_when_all_non_control_found=True,
+                stop_control_arm=control_arm,
+            )
+            probe_discovery_unif = uniform_classic_probe_results[7]
+            stop_time, reached_all = _adaptive_classic_stop_time(
+                probe_discovery_unif,
+                adaptive_stop_target_arms,
+            )
+            if reached_all:
+                effective_horizon = max(1, int(stop_time))
+                print(
+                    "Uniform classic found every non-control arm as positive at "
+                    f"t={effective_horizon}; using this as common horizon."
+                )
+            else:
+                effective_horizon = adaptive_stop_cap
+                print(
+                    "Uniform classic did not find every non-control arm as positive before "
+                    f"the cap; using cap horizon={effective_horizon}."
+                )
+            horizon = effective_horizon
+
         if cached_payload is not None:
             pnb_unif = cached_payload["pnb_unif"]
             pnb_unif_list = cached_payload.get("pnb_unif_list")
@@ -2223,21 +2508,28 @@ if __name__ == "__main__":
             cached_payload["true_positives"] = list(map(int, liste_vrai_positif))
             if SAVE_EXPERIMENT_CACHE:
                 save_experiment_cache(experiment_cache_path, cached_payload)
+            local_algo_payloads[name_data] = cached_payload
         else:
             # 1. Run Simulations
             if type_de_loi=="normal":
-                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
+                if uniform_classic_probe_results is not None:
+                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list, np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = _probe_results_as_run_results(uniform_classic_probe_results)
+                else:
+                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 if adaptive_classic_probe_results is not None:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _truncate_adaptive_probe_results(adaptive_classic_probe_results, adaptive_stop_cap, horizon, HISTORY_RECORD_EVERY)
+                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _probe_results_as_run_results(adaptive_classic_probe_results)
                 else:
                     pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
             elif type_de_loi=="bernouilli":
-                pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
+                if uniform_classic_probe_results is not None:
+                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list, np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = _probe_results_as_run_results(uniform_classic_probe_results)
+                else:
+                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 if adaptive_classic_probe_results is not None:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _truncate_adaptive_probe_results(adaptive_classic_probe_results, adaptive_stop_cap, horizon, HISTORY_RECORD_EVERY)
+                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _probe_results_as_run_results(adaptive_classic_probe_results)
                 else:
                     pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
                 pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
@@ -2308,6 +2600,7 @@ if __name__ == "__main__":
             if SAVE_EXPERIMENT_CACHE:
                 save_experiment_cache(experiment_cache_path, cache_payload)
                 print(f"Saved run_experiment variables to {experiment_cache_path}")
+            local_algo_payloads[name_data] = cache_payload
 
         same_set_method_specs = [
             ("UNIF", "UNIF", discovery_unif),
@@ -3069,6 +3362,12 @@ if __name__ == "__main__":
         # plt.show()
         num_graph+=1
         plt.close()
+
+    generate_local_figure10_same_set_adapt_vs_uniform(
+        output_root,
+        DATASET_KEYS,
+        payloads=local_algo_payloads,
+    )
 
     if GENERATE_ALGO_COMPARISON:
         generate_algorithm_comparison_figures(

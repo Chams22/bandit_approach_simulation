@@ -40,6 +40,7 @@ class JamiesonJainAlgo:
         self.p_values = np.ones(n_arms, dtype=float)
         self._p_values_ready = False
         self._p_values_mu_0 = mu_0
+        self._cycle_next_arm = 0
         
         # History for visualization
         # Initialized with zeros for t=0
@@ -184,18 +185,35 @@ class JamiesonJainAlgo:
         if unsampled:
             return unsampled[0]
         
+        if self.control_arm_idx is not None:
+            treatment_candidates = [i for i in self._test_indices() if i not in self.S_t]
+            if not treatment_candidates:
+                return "stop"
+
+            phi_control = self.phi(
+                self.counts[self.control_arm_idx],
+                self.delta,
+                self._sigma_hat(self.control_arm_idx),
+            )
+            best_ucb = 2.0 * phi_control
+            selected = self.control_arm_idx
+
+            for i in treatment_candidates:
+                ucb = self._gap(i) + self._combined_phi(i, self.delta)
+                if ucb > best_ucb:
+                    best_ucb = ucb
+                    selected = i
+            return selected
+
         candidates = [i for i in self._test_indices() if i not in self.S_t]
         if not candidates:
             return "stop"
 
         best_ucb = -float('inf')
         selected = candidates[0]
-        
+
         for i in candidates:
-            if self.control_arm_idx is None:
-                ucb = self.emp_means[i] + self._combined_phi(i, self.delta)
-            else:
-                ucb = self._gap(i) + self._combined_phi(i, self.delta)
+            ucb = self.emp_means[i] + self._combined_phi(i, self.delta)
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -352,6 +370,7 @@ class UniformAlgo:
         self.p_values = np.ones(n_arms, dtype=float)
         self._p_values_ready = False
         self._p_values_mu_0 = mu_0
+        self._cycle_next_arm = 0
         
         # Historique pour visualisation
         # Initialize with zeros for t=0
@@ -472,24 +491,23 @@ class UniformAlgo:
         self.S_t.update(current_St)
         return self.p_values.tolist()
     
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
+
     def select_arm(self):
-            """
-            Selects the next arm uniformly at random.
-            
-            This avoids periodic sampling biases (unlike deterministic Round-Robin)
-            and simulates a standard randomized controlled trial.
-            
-            Returns
-            -------
-            int
-                The index of the arm to pull.
-            """
-            if self.control_arm_idx is not None:
-                candidates = self._test_indices()
-                if not candidates:
-                    return "stop"
-                return np.random.choice(candidates)
-            return np.random.randint(self.n)
+        """
+        Selects the next arm using deterministic cyclic uniform allocation.
+        This removes avoidable Monte Carlo noise from the uniform baseline.
+        """
+        return self._select_cyclic(list(range(self.n)))
     
     def bh_update_optimized(self, arm_idx, observation):
         """

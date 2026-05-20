@@ -173,6 +173,27 @@ class SuccessiveRejectsAlgo:
                       if i not in self.S_t and i != self.control_arm_idx]
         if not candidates:
             return "stop"
+
+        if self.control_arm_idx is not None:
+            ucb_delta = self.delta / max(self.n, 1)
+            phi_control = self.phi(
+                self.counts[self.control_arm_idx],
+                ucb_delta,
+                self.emp_vars[self.control_arm_idx],
+            )
+            control_score = 2.0 * phi_control
+            best_treatment_score = -float("inf")
+            for i in candidates:
+                treatment_score = (
+                    self.emp_means[i]
+                    - self.emp_means[self.control_arm_idx]
+                    + self.phi(self.counts[i], ucb_delta, self.emp_vars[i])
+                    + phi_control
+                )
+                best_treatment_score = max(best_treatment_score, treatment_score)
+            if control_score >= best_treatment_score:
+                return self.control_arm_idx
+
         idx = self._rr_ptr % len(candidates)
         self._rr_ptr += 1
         return candidates[idx]
@@ -226,6 +247,7 @@ class UniformAlgo:
         self.emp_vars = np.zeros(n_arms, dtype=float)
         self.time = 0
         self.S_t = set()
+        self._cycle_next_arm = 0
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
 
     def _update_stats(self, arm_idx, observation):
@@ -263,13 +285,19 @@ class UniformAlgo:
                 self.counts_evolution.append(self.counts.copy())
         self._bh_update_St()
 
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
+
     def select_arm(self):
-        if self.control_arm_idx is not None:
-            candidates = [i for i in range(self.n) if i != self.control_arm_idx]
-            if not candidates:
-                return "stop"
-            return np.random.choice(candidates)
-        return np.random.randint(self.n)
+        return self._select_cyclic(list(range(self.n)))
 
     def _bh_update_St(self):
         if self.control_arm_idx is not None:

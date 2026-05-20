@@ -9,4 +9,4 @@ A listed arm has exhausted its original observations and is now sampled with rep
    ADAPT
 1. {}
    ADAPT VAR
-1. {4: 154271}
+1. {6: 127558}

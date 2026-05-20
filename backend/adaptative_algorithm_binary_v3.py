@@ -18,9 +18,9 @@ def _deterministic_bootstrap_observation(arm_data, bootstrap_key, no_sim, arm, p
 # NM/NM_M2 BH is intentionally reserved for V2.
 #
 # V3 two-sample mode now uses a pragmatic non-paired betting rule:
-#   treatment arms bet against the previous empirical control mean, while the
-#   control arm is sampled directly by the allocation rule when its uncertainty
-#   is limiting. This reduces control consumption compared with paired pulls.
+#   treatment arms bet against the previous upper confidence bound of the
+#   control mean, while the control arm is sampled directly by the allocation
+#   rule when its uncertainty is limiting.
 # -----------------------------------------------------------------------------
 
 class JamiesonJainAlgo:
@@ -56,17 +56,49 @@ class JamiesonJainAlgo:
         self.rho = rho
         self.cs_type = cs_type
         self.control_arm_idx = control_arm_idx
+        self.control_delta_fraction = 0.2
+        self.control_ucb_delta = max(self.delta * self.control_delta_fraction, 1e-12)
+        self.discovery_delta = max(self.delta * (1.0 - self.control_delta_fraction), 1e-12)
 
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
         self.emp_vars = np.zeros(n_arms, dtype=float)
         self.time = 0
         self.S_t = set()
+        self._cycle_next_arm = 0
 
         if cs_type == 'betting':
             self.log_martingale = np.zeros(n_arms, dtype=float)
 
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+
+    def _two_sample_delta(self):
+        return self.discovery_delta if self.control_arm_idx is not None else self.delta
+
+    def _control_ucb_from_stats(self, mean, var_stat, count):
+        if count <= 0:
+            return float('inf')
+        ucb = mean + self.phi(count, self.control_ucb_delta, var_stat)
+        return float(np.clip(ucb, 0.0, 1.0))
+
+    def _current_control_ucb(self):
+        ctrl = self.control_arm_idx
+        return self._control_ucb_from_stats(
+            self.emp_means[ctrl],
+            self.emp_vars[ctrl],
+            self.counts[ctrl],
+        )
+
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
 
     # -------------------------------------------------------------------------
     # Statistics update
@@ -90,14 +122,24 @@ class JamiesonJainAlgo:
         if should_bet and self.control_arm_idx is not None:
             if arm_idx == self.control_arm_idx:
                 should_bet = False
-            elif control_mean_prev is None and self.counts[self.control_arm_idx] == 0:
-                should_bet = False
+            else:
+                ctrl = self.control_arm_idx
+                if control_count_prev is None:
+                    control_count_prev = self.counts[ctrl]
+                if control_mean_prev is None:
+                    control_mean_prev = self.emp_means[ctrl]
+                if control_var_prev is None:
+                    control_var_prev = self.emp_vars[ctrl]
+                if control_count_prev <= 0:
+                    should_bet = False
 
         if should_bet:
-            if control_mean_prev is not None:
-                mu0 = control_mean_prev
-            elif self.control_arm_idx is not None:
-                mu0 = self.emp_means[self.control_arm_idx]
+            if self.control_arm_idx is not None:
+                mu0 = self._control_ucb_from_stats(
+                    control_mean_prev,
+                    control_var_prev,
+                    control_count_prev,
+                )
             else:
                 mu0 = self.mu_0
             mu0_safe = np.clip(mu0, 1e-6, 1.0 - 1e-6)
@@ -148,7 +190,7 @@ class JamiesonJainAlgo:
         if self.control_arm_idx is not None:
             if arm_idx == self.control_arm_idx or self.counts[self.control_arm_idx] == 0:
                 return 1.0
-            mu0_ref = self.emp_means[self.control_arm_idx]
+            mu0_ref = self._current_control_ucb()
         else:
             mu0_ref = self.mu_0
         diff = self.emp_means[arm_idx] - mu0_ref
@@ -172,7 +214,8 @@ class JamiesonJainAlgo:
         Initializes the algorithm with pre-collected data for each arm.
 
         Two-sample betting mode: the control arm is initialized first, then each
-        treatment arm is initialized against the current empirical control mean.
+        treatment arm is initialized against the current upper confidence bound
+        of the control mean.
         No treatment-control index matching is used.
 
         All other modes: original sequential processing.
@@ -189,8 +232,16 @@ class JamiesonJainAlgo:
                 if arm_idx == self.control_arm_idx:
                     continue
                 for obs in arm_data:
+                    control_count_prev = self.counts[self.control_arm_idx]
                     control_mean_prev = self.emp_means[self.control_arm_idx]
-                    self._update_stats(arm_idx, obs, control_mean_prev=control_mean_prev)
+                    control_var_prev = self.emp_vars[self.control_arm_idx]
+                    self._update_stats(
+                        arm_idx,
+                        obs,
+                        control_mean_prev=control_mean_prev,
+                        control_var_prev=control_var_prev,
+                        control_count_prev=control_count_prev,
+                    )
                     self.counts[arm_idx] += 1
                     self.time += 1
                     self.counts_evolution.append(self.counts.copy())
@@ -224,8 +275,9 @@ class JamiesonJainAlgo:
                                  for i in range(self.n) if i != self.control_arm_idx]
             p_values_with_idx.sort(key=lambda x: x[0])
             n_tested = self.n - 1
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                if p_values_with_idx[k - 1][0] <= bh_delta * k / n_tested:
                     for rank in range(k):
                         self.S_t.add(p_values_with_idx[rank][1])
                     break
@@ -254,14 +306,14 @@ class JamiesonJainAlgo:
                 return "stop"
 
             phi_ctrl = self.phi(self.counts[self.control_arm_idx],
-                                self.delta,
+                                self.control_ucb_delta,
                                 self.emp_vars[self.control_arm_idx])
             best_ucb = 2.0 * phi_ctrl
             selected = self.control_arm_idx
 
             for i in treatment_candidates:
                 ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]
-                       + self.phi(self.counts[i], self.delta, self.emp_vars[i])
+                       + self.phi(self.counts[i], self._two_sample_delta(), self.emp_vars[i])
                        + phi_ctrl)
                 if ucb > best_ucb:
                     best_ucb = ucb
@@ -304,8 +356,9 @@ class JamiesonJainAlgo:
         if self.control_arm_idx is not None:
             tested_indices = [i for i in range(self.n) if i != self.control_arm_idx]
             n_tested = len(tested_indices)
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                effective_delta = self.delta * k / n_tested
+                effective_delta = bh_delta * k / n_tested
                 phi_ctrl = self.phi(self.counts[self.control_arm_idx],
                                     effective_delta,
                                     self.emp_vars[self.control_arm_idx])
@@ -344,12 +397,23 @@ class JamiesonJainAlgo:
         """
         # Save F_{t-1}-measurable control mean before any treatment update.
         control_mean_prev = None
+        control_var_prev = None
+        control_count_prev = None
         if (self.control_arm_idx is not None
                 and arm_idx != self.control_arm_idx
                 and self.counts[self.control_arm_idx] > 0):
-            control_mean_prev = self.emp_means[self.control_arm_idx]
+            ctrl = self.control_arm_idx
+            control_mean_prev = self.emp_means[ctrl]
+            control_var_prev = self.emp_vars[ctrl]
+            control_count_prev = self.counts[ctrl]
 
-        self._update_stats(arm_idx, observation, control_mean_prev=control_mean_prev)
+        self._update_stats(
+            arm_idx,
+            observation,
+            control_mean_prev=control_mean_prev,
+            control_var_prev=control_var_prev,
+            control_count_prev=control_count_prev,
+        )
         self.counts[arm_idx] += 1
 
         self.time += 1
@@ -366,8 +430,9 @@ class JamiesonJainAlgo:
                 p_values[i] = pv
             p_values_with_idx.sort(key=lambda x: x[0])
             n_tested = self.n - 1
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                if p_values_with_idx[k - 1][0] <= bh_delta * k / n_tested:
                     for rank in range(k):
                         current_St.add(p_values_with_idx[rank][1])
                     break
@@ -405,17 +470,49 @@ class UniformAlgo:
         self.rho = rho
         self.cs_type = cs_type
         self.control_arm_idx = control_arm_idx
+        self.control_delta_fraction = 0.2
+        self.control_ucb_delta = max(self.delta * self.control_delta_fraction, 1e-12)
+        self.discovery_delta = max(self.delta * (1.0 - self.control_delta_fraction), 1e-12)
 
         self.counts = np.zeros(n_arms, dtype=int)
         self.emp_means = np.zeros(n_arms, dtype=float)
         self.emp_vars = np.zeros(n_arms, dtype=float)
         self.time = 0
         self.S_t = set()
+        self._cycle_next_arm = 0
 
         if cs_type == 'betting':
             self.log_martingale = np.zeros(n_arms, dtype=float)
 
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+
+    def _two_sample_delta(self):
+        return self.discovery_delta if self.control_arm_idx is not None else self.delta
+
+    def _control_ucb_from_stats(self, mean, var_stat, count):
+        if count <= 0:
+            return float('inf')
+        ucb = mean + self.phi(count, self.control_ucb_delta, var_stat)
+        return float(np.clip(ucb, 0.0, 1.0))
+
+    def _current_control_ucb(self):
+        ctrl = self.control_arm_idx
+        return self._control_ucb_from_stats(
+            self.emp_means[ctrl],
+            self.emp_vars[ctrl],
+            self.counts[ctrl],
+        )
+
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
 
     def init_process(self, data):
         if self.control_arm_idx is not None and self.cs_type == 'betting':
@@ -430,8 +527,16 @@ class UniformAlgo:
                 if arm_idx == self.control_arm_idx:
                     continue
                 for obs in arm_data:
+                    control_count_prev = self.counts[self.control_arm_idx]
                     control_mean_prev = self.emp_means[self.control_arm_idx]
-                    self._update_stats(arm_idx, obs, control_mean_prev=control_mean_prev)
+                    control_var_prev = self.emp_vars[self.control_arm_idx]
+                    self._update_stats(
+                        arm_idx,
+                        obs,
+                        control_mean_prev=control_mean_prev,
+                        control_var_prev=control_var_prev,
+                        control_count_prev=control_count_prev,
+                    )
                     self.counts[arm_idx] += 1
                     self.time += 1
                     self.counts_evolution.append(self.counts.copy())
@@ -461,8 +566,9 @@ class UniformAlgo:
                                  for i in range(self.n) if i != self.control_arm_idx]
             p_values_with_idx.sort(key=lambda x: x[0])
             n_tested = self.n - 1
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                if p_values_with_idx[k - 1][0] <= bh_delta * k / n_tested:
                     for rank in range(k):
                         self.S_t.add(p_values_with_idx[rank][1])
                     break
@@ -476,14 +582,24 @@ class UniformAlgo:
         if should_bet and self.control_arm_idx is not None:
             if arm_idx == self.control_arm_idx:
                 should_bet = False
-            elif control_mean_prev is None and self.counts[self.control_arm_idx] == 0:
-                should_bet = False
+            else:
+                ctrl = self.control_arm_idx
+                if control_count_prev is None:
+                    control_count_prev = self.counts[ctrl]
+                if control_mean_prev is None:
+                    control_mean_prev = self.emp_means[ctrl]
+                if control_var_prev is None:
+                    control_var_prev = self.emp_vars[ctrl]
+                if control_count_prev <= 0:
+                    should_bet = False
 
         if should_bet:
-            if control_mean_prev is not None:
-                mu0 = control_mean_prev
-            elif self.control_arm_idx is not None:
-                mu0 = self.emp_means[self.control_arm_idx]
+            if self.control_arm_idx is not None:
+                mu0 = self._control_ucb_from_stats(
+                    control_mean_prev,
+                    control_var_prev,
+                    control_count_prev,
+                )
             else:
                 mu0 = self.mu_0
             mu0_safe = np.clip(mu0, 1e-6, 1.0 - 1e-6)
@@ -513,7 +629,7 @@ class UniformAlgo:
         if self.control_arm_idx is not None:
             if arm_idx == self.control_arm_idx or self.counts[self.control_arm_idx] == 0:
                 return 1.0
-            mu0_ref = self.emp_means[self.control_arm_idx]
+            mu0_ref = self._current_control_ucb()
         else:
             mu0_ref = self.mu_0
         diff = self.emp_means[arm_idx] - mu0_ref
@@ -530,16 +646,27 @@ class UniformAlgo:
             return float(np.clip(p_value, 1e-300, 1.0))
 
     def select_arm(self):
-        return np.random.randint(self.n)
+        return self._select_cyclic(list(range(self.n)))
 
     def bh_update_optimized(self, arm_idx, observation, x_control=None):
         control_mean_prev = None
+        control_var_prev = None
+        control_count_prev = None
         if (self.control_arm_idx is not None
                 and arm_idx != self.control_arm_idx
                 and self.counts[self.control_arm_idx] > 0):
-            control_mean_prev = self.emp_means[self.control_arm_idx]
+            ctrl = self.control_arm_idx
+            control_mean_prev = self.emp_means[ctrl]
+            control_var_prev = self.emp_vars[ctrl]
+            control_count_prev = self.counts[ctrl]
 
-        self._update_stats(arm_idx, observation, control_mean_prev=control_mean_prev)
+        self._update_stats(
+            arm_idx,
+            observation,
+            control_mean_prev=control_mean_prev,
+            control_var_prev=control_var_prev,
+            control_count_prev=control_count_prev,
+        )
         self.counts[arm_idx] += 1
 
         self.time += 1
@@ -555,8 +682,9 @@ class UniformAlgo:
                 p_values[i] = pv
             p_values_with_idx.sort(key=lambda x: x[0])
             n_tested = self.n - 1
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                if p_values_with_idx[k - 1][0] <= self.delta * k / n_tested:
+                if p_values_with_idx[k - 1][0] <= bh_delta * k / n_tested:
                     for rank in range(k):
                         current_St.add(p_values_with_idx[rank][1])
                     break
@@ -583,8 +711,9 @@ class UniformAlgo:
         if self.control_arm_idx is not None:
             tested_indices = [i for i in range(self.n) if i != self.control_arm_idx]
             n_tested = len(tested_indices)
+            bh_delta = self._two_sample_delta()
             for k in range(n_tested, 0, -1):
-                effective_delta = self.delta * k / n_tested
+                effective_delta = bh_delta * k / n_tested
                 phi_ctrl = self.phi(self.counts[self.control_arm_idx],
                                     effective_delta,
                                     self.emp_vars[self.control_arm_idx])

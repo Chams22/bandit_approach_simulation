@@ -207,6 +207,32 @@ class JamiesonJainAlgo:
         if unsampled:
             return unsampled[0]
 
+        if self.control_arm_idx is not None:
+            treatment_candidates = [
+                i for i in range(self.n)
+                if i != self.control_arm_idx and i not in self.S_t
+            ]
+            if not treatment_candidates:
+                return "stop"
+
+            ucb_delta = self.delta / max(self.n, 1)
+            phi_control = self.phi(
+                self.counts[self.control_arm_idx],
+                ucb_delta,
+                self.emp_vars[self.control_arm_idx],
+            )
+            best_ucb = 2.0 * phi_control
+            selected = self.control_arm_idx
+
+            for i in treatment_candidates:
+                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
+                      + self.phi(self.counts[i], ucb_delta, self.emp_vars[i]) \
+                      + phi_control
+                if ucb > best_ucb:
+                    best_ucb = ucb
+                    selected = i
+            return selected
+
         candidates = [i for i in range(self.n) if i not in self.S_t]
         if not candidates:
             return "stop"
@@ -216,12 +242,7 @@ class JamiesonJainAlgo:
         ucb_delta = self.delta / max(self.n, 1)
 
         for i in candidates:
-            if self.control_arm_idx is not None:
-                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
-                      + self.phi(self.counts[i], ucb_delta, self.emp_vars[i]) \
-                      + self.phi(self.counts[self.control_arm_idx], ucb_delta, self.emp_vars[self.control_arm_idx])
-            else:
-                ucb = self.emp_means[i] + self.phi(self.counts[i], ucb_delta, self.emp_vars[i])
+            ucb = self.emp_means[i] + self.phi(self.counts[i], ucb_delta, self.emp_vars[i])
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -334,6 +355,7 @@ class UniformAlgo:
         self.emp_vars = np.zeros(n_arms, dtype=float)
         self.time = 0
         self.S_t = set()
+        self._cycle_next_arm = 0
 
         self.counts_evolution = [np.zeros(n_arms, dtype=int)]
     def init_process(self, data):
@@ -387,13 +409,19 @@ class UniformAlgo:
                    * np.exp(-diff ** 2 * t ** 2 / (2 * (var_stat + self.rho))))
         return float(np.clip(p_value, 1e-300, 1.0))
 
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
+
     def select_arm(self):
-        if self.control_arm_idx is not None:
-            candidates = [i for i in range(self.n) if i != self.control_arm_idx]
-            if not candidates:
-                return "stop"
-            return np.random.choice(candidates)
-        return np.random.randint(self.n)
+        return self._select_cyclic(list(range(self.n)))
 
     def bh_update_optimized(self, arm_idx, observation):
         self._update_stats(arm_idx, observation)
