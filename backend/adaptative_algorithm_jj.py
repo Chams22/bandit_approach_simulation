@@ -60,12 +60,15 @@ class JamiesonJainAlgo:
         return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
 
     def _combined_phi(self, arm_idx, delta_val):
-        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
         if self.control_arm_idx is None:
-            return phi_arm
+            return self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        # Two-sample: joint CI on (mu_arm, mu_control) needs a union bound,
+        # so each side is taken at delta/2 to keep the global level at delta_val.
+        half_delta = delta_val / 2.0
+        phi_arm = self.phi(self.counts[arm_idx], half_delta, self._sigma_hat(arm_idx))
         phi_control = self.phi(
             self.counts[self.control_arm_idx],
-            delta_val,
+            half_delta,
             self._sigma_hat(self.control_arm_idx),
         )
         return phi_arm + phi_control
@@ -390,12 +393,15 @@ class UniformAlgo:
         return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
 
     def _combined_phi(self, arm_idx, delta_val):
-        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
         if self.control_arm_idx is None:
-            return phi_arm
+            return self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        # Two-sample: joint CI on (mu_arm, mu_control) needs a union bound,
+        # so each side is taken at delta/2 to keep the global level at delta_val.
+        half_delta = delta_val / 2.0
+        phi_arm = self.phi(self.counts[arm_idx], half_delta, self._sigma_hat(arm_idx))
         phi_control = self.phi(
             self.counts[self.control_arm_idx],
-            delta_val,
+            half_delta,
             self._sigma_hat(self.control_arm_idx),
         )
         return phi_arm + phi_control
