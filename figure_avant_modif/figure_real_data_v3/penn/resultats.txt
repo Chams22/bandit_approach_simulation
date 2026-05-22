@@ -1,0 +1,10 @@
+List of the positive arm detected
+
+   UNIF
+1. {4, 5, 7}
+   UNIF VAR
+1. {2, 4, 5, 7, 14, 17}
+   ADAPT
+1. {2, 4, 5, 7, 8, 14, 17}
+   ADAPT VAR
+1. {0, 2, 4, 5, 7, 8, 14, 17, 18, 19}

@@ -1,7 +1,15 @@
 import numpy as np
+import hashlib
 from tqdm import tqdm
 from scipy.optimize import brentq
 from statistics import mean
+
+
+def _deterministic_bootstrap_observation(arm_data, bootstrap_key, no_sim, arm, pull_index):
+    raw = f"{bootstrap_key}|{no_sim}|{arm}|{pull_index}".encode("utf-8")
+    idx = int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big") % len(arm_data)
+    return arm_data[idx]
+
 
 # -----------------------------------------------------------------------------
 # PART 1: THE ALGORITHM
@@ -32,6 +40,7 @@ class JamiesonJainAlgo:
         self.p_values = np.ones(n_arms, dtype=float)
         self._p_values_ready = False
         self._p_values_mu_0 = mu_0
+        self._cycle_next_arm = 0
         
         # History for visualization
         # Initialized with zeros for t=0
@@ -51,12 +60,15 @@ class JamiesonJainAlgo:
         return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
 
     def _combined_phi(self, arm_idx, delta_val):
-        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
         if self.control_arm_idx is None:
-            return phi_arm
+            return self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        # Two-sample: joint CI on (mu_arm, mu_control) needs a union bound,
+        # so each side is taken at delta/2 to keep the global level at delta_val.
+        half_delta = delta_val / 2.0
+        phi_arm = self.phi(self.counts[arm_idx], half_delta, self._sigma_hat(arm_idx))
         phi_control = self.phi(
             self.counts[self.control_arm_idx],
-            delta_val,
+            half_delta,
             self._sigma_hat(self.control_arm_idx),
         )
         return phi_arm + phi_control
@@ -176,18 +188,35 @@ class JamiesonJainAlgo:
         if unsampled:
             return unsampled[0]
         
+        if self.control_arm_idx is not None:
+            treatment_candidates = [i for i in self._test_indices() if i not in self.S_t]
+            if not treatment_candidates:
+                return "stop"
+
+            phi_control = self.phi(
+                self.counts[self.control_arm_idx],
+                self.delta,
+                self._sigma_hat(self.control_arm_idx),
+            )
+            best_ucb = 2.0 * phi_control
+            selected = self.control_arm_idx
+
+            for i in treatment_candidates:
+                ucb = self._gap(i) + self._combined_phi(i, self.delta)
+                if ucb > best_ucb:
+                    best_ucb = ucb
+                    selected = i
+            return selected
+
         candidates = [i for i in self._test_indices() if i not in self.S_t]
         if not candidates:
             return "stop"
 
         best_ucb = -float('inf')
         selected = candidates[0]
-        
+
         for i in candidates:
-            if self.control_arm_idx is None:
-                ucb = self.emp_means[i] + self._combined_phi(i, self.delta)
-            else:
-                ucb = self._gap(i) + self._combined_phi(i, self.delta)
+            ucb = self.emp_means[i] + self._combined_phi(i, self.delta)
             if ucb > best_ucb:
                 best_ucb = ucb
                 selected = i
@@ -344,6 +373,7 @@ class UniformAlgo:
         self.p_values = np.ones(n_arms, dtype=float)
         self._p_values_ready = False
         self._p_values_mu_0 = mu_0
+        self._cycle_next_arm = 0
         
         # Historique pour visualisation
         # Initialize with zeros for t=0
@@ -363,12 +393,15 @@ class UniformAlgo:
         return self.emp_means[arm_idx] - self.emp_means[self.control_arm_idx]
 
     def _combined_phi(self, arm_idx, delta_val):
-        phi_arm = self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
         if self.control_arm_idx is None:
-            return phi_arm
+            return self.phi(self.counts[arm_idx], delta_val, self._sigma_hat(arm_idx))
+        # Two-sample: joint CI on (mu_arm, mu_control) needs a union bound,
+        # so each side is taken at delta/2 to keep the global level at delta_val.
+        half_delta = delta_val / 2.0
+        phi_arm = self.phi(self.counts[arm_idx], half_delta, self._sigma_hat(arm_idx))
         phi_control = self.phi(
             self.counts[self.control_arm_idx],
-            delta_val,
+            half_delta,
             self._sigma_hat(self.control_arm_idx),
         )
         return phi_arm + phi_control
@@ -464,24 +497,23 @@ class UniformAlgo:
         self.S_t.update(current_St)
         return self.p_values.tolist()
     
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
+
     def select_arm(self):
-            """
-            Selects the next arm uniformly at random.
-            
-            This avoids periodic sampling biases (unlike deterministic Round-Robin)
-            and simulates a standard randomized controlled trial.
-            
-            Returns
-            -------
-            int
-                The index of the arm to pull.
-            """
-            if self.control_arm_idx is not None:
-                candidates = self._test_indices()
-                if not candidates:
-                    return "stop"
-                return np.random.choice(candidates)
-            return np.random.randint(self.n)
+        """
+        Selects the next arm using deterministic cyclic uniform allocation.
+        This removes avoidable Monte Carlo noise from the uniform baseline.
+        """
+        return self._select_cyclic(list(range(self.n)))
     
     def bh_update_optimized(self, arm_idx, observation):
         """
@@ -614,7 +646,10 @@ def _should_record_history(step, horizon, history_record_every):
 def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                             control_arm, init_nb, init_choice, variable_mu_choice,
                             n_arms, is_true_mean, true_positives,
-                            history_record_every=1):
+                            history_record_every=1,
+                            stop_when_all_non_control_found=False,
+                            stop_control_arm=None,
+                            deterministic_bootstrap_key="default"):
     """
     Runs a single simulation for a given algorithm instance.
     Common logic shared between 'adaptive' and 'uniform' modes.
@@ -624,6 +659,34 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
     run_pr = []
     bootstrap_start_times = {}
     history_record_every = max(1, int(history_record_every))
+    stop_target_arms = set(range(n_arms))
+    if stop_control_arm is not None:
+        stop_target_arms.discard(int(stop_control_arm))
+
+    def all_stop_targets_found():
+        return (
+            stop_when_all_non_control_found
+            and stop_target_arms.issubset({int(arm) for arm in algo.S_t})
+        )
+
+    def fill_remaining(current_done):
+        remaining_steps = horizon - current_done
+        if remaining_steps <= 0:
+            return
+        if is_true_mean:
+            nb_found = len(algo.S_t.intersection(true_positives))
+            last_pr = nb_found / len(true_positives) if true_positives else 1.0
+        else:
+            last_pr = len(algo.S_t)
+        run_pr.extend([last_pr] * remaining_steps)
+        last_counts = algo.counts_evolution[-1] if algo.counts_evolution else algo.counts.copy()
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                algo.counts_evolution.append(last_counts.copy())
+        last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                p_values_list.append(list(last_p_values))
 
     # --- Init (adaptive only) ---
     if init_choice:
@@ -637,6 +700,9 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             algo.counts_evolution = [algo.counts.copy()]
 
     discovery_times = {int(arm): 0 for arm in algo.S_t}
+    if all_stop_targets_found():
+        fill_remaining(0)
+        return run_pr, p_values_list, discovery_times, bootstrap_start_times
     
     # --- Main loop ---
     for t in range(0, horizon):
@@ -655,30 +721,7 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             # so that arrays have the correct size (horizon)
             print("stop triggered")
             
-            current_done = len(run_pr)
-            remaining_steps = horizon - current_done
-            
-            # 1. Rattrapage pour run_pr
-            if is_true_mean:
-                nb_found = len(algo.S_t.intersection(true_positives))
-                last_pr = nb_found / len(true_positives) if true_positives else 1.0
-            else:
-                last_pr = len(algo.S_t)
-            run_pr.extend([last_pr] * remaining_steps)
-
-            # 2. Rattrapage pour counts_evolution
-            last_counts = algo.counts_evolution[-1]
-            for step in range(current_done + 1, horizon + 1):
-                if _should_record_history(step, horizon, history_record_every):
-                    algo.counts_evolution.append(last_counts.copy())
-                
-            # 3. Rattrapage pour p_values_list (LA CORRECTION)
-            # Reuse the last computed p-value list (or default to 1.0 if empty)
-            last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
-            for step in range(current_done + 1, horizon + 1):
-                # Use list() to create an independent copy at each iteration
-                if _should_record_history(step, horizon, history_record_every):
-                    p_values_list.append(list(last_p_values))
+            fill_remaining(len(run_pr))
             break
 
         else:
@@ -688,7 +731,13 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
             # if we are at the end of the arm we start at zero again
             if all_arm_counts[arm] >= len_arm:
                 bootstrap_start_times.setdefault(int(arm), current_step)
-                observation = np.random.choice(all_arm_data[no_sim][arm])
+                observation = _deterministic_bootstrap_observation(
+                    all_arm_data[no_sim][arm],
+                    deterministic_bootstrap_key,
+                    no_sim,
+                    arm,
+                    all_arm_counts[arm],
+                )
             else:
                 observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
 
@@ -712,10 +761,20 @@ def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
                 # adding the number of arm found as positive in this turn
                 nb_found = len(algo.S_t)
                 run_pr.append(nb_found)  # number of positive in the simulation by draw
+
+            if all_stop_targets_found():
+                fill_remaining(current_step)
+                break
     return run_pr, p_values_list, discovery_times, bootstrap_start_times
 
 
-def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations, control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean, return_discovery_times=False, return_bootstrap_times=False, history_record_every=1):
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
+                   control_arm, init_nb, init_choice, variable_mu_choice,
+                   is_true_mean, return_discovery_times=False,
+                   return_bootstrap_times=False, history_record_every=1,
+                   stop_when_all_non_control_found=False,
+                   stop_control_arm=None,
+                   deterministic_bootstrap_key="default"):
     """
     Runs the bandit experiment using pre-generated data for consistency.
 
@@ -819,7 +878,10 @@ def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations
         run_pr, p_values_list, discovery_times, bootstrap_start_times = _run_single_simulation(
             algo, no_sim, all_arm_data, horizon, mode,
             control_arm, init_nb, init_choice, variable_mu_choice, n_arms,
-            is_true_mean, true_positives, history_record_every
+            is_true_mean, true_positives, history_record_every,
+            stop_when_all_non_control_found=stop_when_all_non_control_found,
+            stop_control_arm=control_arm if stop_control_arm is None else stop_control_arm,
+            deterministic_bootstrap_key=deterministic_bootstrap_key,
         )
 
         # save the list of the positive at the end of the simulation
