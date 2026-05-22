@@ -28,6 +28,7 @@ import sys
 import os
 import pickle
 from datetime import datetime
+from scipy.stats import kendalltau
 
 # --- Import du backend ---------------------------------------------------------
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -900,6 +901,318 @@ def plot_algo_comparison_speed(summary_df):
     return fig
 
 
+def _rank_bootstrap_ci(disc_times_list, n_arms, sentinel, n_bootstrap=500, ci=95):
+    """
+    Bootstrap CI on the per-arm detection rank.
+    Returns dict {arm: (median_rank, low_rank, high_rank)}.
+    Ties broken by average rank (method='average').
+    """
+    rng = np.random.default_rng(42)
+    n_sims = len(disc_times_list)
+    boot_ranks = {arm: [] for arm in range(n_arms)}
+
+    for _ in range(n_bootstrap):
+        idx = rng.integers(0, n_sims, size=n_sims)
+        sample = [disc_times_list[i] for i in idx]
+        medians = np.array([np.median([d.get(arm, sentinel) for d in sample])
+                            for arm in range(n_arms)], dtype=float)
+        # rank: argsort twice gives rank (0-based → +1)
+        order = np.argsort(medians)
+        ranks = np.empty_like(order)
+        ranks[order] = np.arange(1, n_arms + 1)
+        for arm in range(n_arms):
+            boot_ranks[arm].append(ranks[arm])
+
+    alpha = (100 - ci) / 2
+    result = {}
+    for arm in range(n_arms):
+        r = np.array(boot_ranks[arm])
+        result[arm] = (float(np.median(r)),
+                       float(np.percentile(r, alpha)),
+                       float(np.percentile(r, 100 - alpha)))
+    return result
+
+
+def plot_algo_comparison_detection_order(results, cfg, mode="adaptive"):
+    """
+    Box-plot multi-algo des temps de première détection + heatmap Kendall τ.
+    mode : 'adaptive' ou 'uniform'
+    """
+    true_means = cfg["true_means"]
+    mu_0 = cfg["mu_0"]
+    horizon = cfg["horizon"]
+    variable_mu_choice = cfg.get("variable_mu_choice", False)
+    control_arm = cfg.get("control_arm", None)
+    n_arms = len(true_means)
+    sentinel = horizon + 1
+
+    dt_key = "disc_times_adapt" if mode == "adaptive" else "disc_times_unif"
+    algo_labels = [lbl for lbl in results if dt_key in results[lbl]]
+    if not algo_labels:
+        return None, None
+
+    ref = true_means[int(control_arm)] if (variable_mu_choice and control_arm is not None) else mu_0
+    arms_to_show = [i for i in range(n_arms)
+                    if not (variable_mu_choice and control_arm is not None and i == int(control_arm))]
+
+    # ---- Palette par algo ----
+    palette = ["#e07b39", "#4c8fdb", "#2ca02c", "#9467bd",
+               "#d62728", "#8c564b", "#e377c2", "#7f7f7f"]
+    colors = {lbl: palette[i % len(palette)] for i, lbl in enumerate(algo_labels)}
+
+    # ---- Trier les bras par moyenne des médianes sur tous les algos (tri neutre) ----
+    arm_mean_median = {
+        arm: np.mean([
+            np.median([d.get(arm, sentinel) for d in results[lbl][dt_key]])
+            for lbl in algo_labels
+        ])
+        for arm in arms_to_show
+    }
+    arms_sorted = sorted(arms_to_show, key=lambda a: arm_mean_median[a])
+    arm_labels = [f"Bras {a}\n(μ={true_means[a]:.2f})" for a in arms_sorted]
+
+    n_algos = len(algo_labels)
+    width = 0.7 / n_algos
+    positions_base = np.arange(len(arms_sorted), dtype=float)
+
+    fig, ax = plt.subplots(figsize=(max(9, len(arms_sorted) * 1.6), 5))
+
+    rank_vectors = {}   # algo → rank vector indexed by arm (for Kendall)
+
+    for k, lbl in enumerate(algo_labels):
+        dt_list = results[lbl][dt_key]
+        offset = (k - (n_algos - 1) / 2) * width
+
+        data_by_arm = [np.array([d.get(arm, sentinel) for d in dt_list])
+                       for arm in arms_sorted]
+
+        bp = ax.boxplot(
+            data_by_arm,
+            positions=positions_base + offset,
+            widths=width * 0.85,
+            patch_artist=True,
+            manage_ticks=False,
+            medianprops=dict(color="white", linewidth=2),
+            flierprops=dict(marker=".", markersize=3, alpha=0.4),
+        )
+        for patch in bp["boxes"]:
+            patch.set_facecolor(colors[lbl])
+            patch.set_alpha(0.75)
+
+        # Bootstrap CI sur les rangs
+        ci_ranks = _rank_bootstrap_ci(dt_list, n_arms, sentinel)
+
+        # Rang médian + CI + annotation au-dessus de chaque boîte
+        for pos, arm, data in zip(positions_base + offset, arms_sorted, data_by_arm):
+            med_rank, lo, hi = ci_ranks[arm]
+            top = float(np.percentile(data, 75)) if len(data) else sentinel
+            ax.text(pos, top,
+                    f"#{med_rank:.0f}\n[{lo:.0f}–{hi:.0f}]",
+                    ha="center", va="bottom", fontsize=6.5,
+                    color=colors[lbl], fontweight="bold")
+
+        # Vecteur de rangs pour Kendall (basé sur médianes)
+        arm_med = np.array([np.median([d.get(arm, sentinel) for d in dt_list])
+                            for arm in range(n_arms)])
+        order = np.argsort(arm_med)
+        rv = np.empty(n_arms, dtype=float)
+        rv[order] = np.arange(1, n_arms + 1)
+        rank_vectors[lbl] = rv
+
+    ax.set_xticks(positions_base)
+    ax.set_xticklabels(arm_labels, fontsize=9)
+    ax.set_ylabel("Temps de première détection (t)")
+    ax.set_title(f"Ordre de détection des bras — {mode.capitalize()} — tous algos\n"
+                 f"Annotations : rang médian [IC 95% bootstrap]. Bras triés par moyenne des médianes. Fond vert=H1, rouge=H0.")
+    ax.legend(
+        handles=[plt.Rectangle((0, 0), 1, 1, fc=colors[lbl], alpha=0.75) for lbl in algo_labels],
+        labels=algo_labels, loc="upper left", fontsize=8,
+    )
+    if horizon:
+        ax.axhline(sentinel, color="grey", linestyle=":", linewidth=1)
+    for pos, arm in zip(positions_base, arms_sorted):
+        ax.axvspan(pos - 0.5, pos + 0.5, alpha=0.04,
+                   color="#00c000" if true_means[arm] > ref else "#c00000")
+    ax.grid(True, axis="y", alpha=0.3)
+    plt.tight_layout()
+
+    # ---- Heatmap Kendall τ ----
+    n = len(algo_labels)
+    tau_matrix = np.ones((n, n))
+    pval_matrix = np.zeros((n, n))
+    for i, lbl_i in enumerate(algo_labels):
+        for j, lbl_j in enumerate(algo_labels):
+            if i != j:
+                tau, pval = kendalltau(rank_vectors[lbl_i][arms_to_show],
+                                       rank_vectors[lbl_j][arms_to_show])
+                tau_matrix[i, j] = tau
+                pval_matrix[i, j] = pval
+
+    fig2, ax2 = plt.subplots(figsize=(max(4, n * 1.2), max(3.5, n * 1.1)))
+    im = ax2.imshow(tau_matrix, vmin=-1, vmax=1, cmap="RdYlGn", aspect="auto")
+    plt.colorbar(im, ax=ax2, label="Kendall τ")
+    ax2.set_xticks(range(n)); ax2.set_xticklabels(algo_labels, rotation=30, ha="right")
+    ax2.set_yticks(range(n)); ax2.set_yticklabels(algo_labels)
+    for i in range(n):
+        for j in range(n):
+            sig = "**" if pval_matrix[i, j] < 0.01 else ("*" if pval_matrix[i, j] < 0.05 else "")
+            ax2.text(j, i, f"{tau_matrix[i,j]:.2f}{sig}",
+                     ha="center", va="center", fontsize=9,
+                     color="black" if abs(tau_matrix[i, j]) < 0.7 else "white")
+    ax2.set_title(f"Concordance d'ordre de détection — Kendall τ ({mode})\n"
+                  f"* p<0.05  ** p<0.01")
+    plt.tight_layout()
+
+    # ---- Graphe d'écart inter-algo (robustesse temporelle) ----
+    # Pour chaque bras : médiane de détection par algo + range max-min
+    arm_med_by_algo = {}
+    for lbl in algo_labels:
+        dt_list = results[lbl][dt_key]
+        arm_med_by_algo[lbl] = {
+            arm: float(np.median([d.get(arm, sentinel) for d in dt_list]))
+            for arm in arms_to_show
+        }
+
+    fig3, ax3 = plt.subplots(figsize=(max(8, len(arms_sorted) * 1.4), 4))
+    x = np.arange(len(arms_sorted))
+    linestyles = ["-", "--", "-.", ":"]
+    markers    = ["o", "s", "^", "D"]
+    # Petit décalage horizontal pour éviter la superposition parfaite
+    x_offsets = np.linspace(-0.15, 0.15, len(algo_labels))
+
+    for k, lbl in enumerate(algo_labels):
+        meds = [arm_med_by_algo[lbl][arm] for arm in arms_sorted]
+        ax3.plot(x + x_offsets[k], meds,
+                 linestyle=linestyles[k % len(linestyles)],
+                 marker=markers[k % len(markers)],
+                 color=colors[lbl], label=lbl,
+                 linewidth=1.5, markersize=5, alpha=0.85)
+
+    # Bande d'écart max-min
+    all_meds = np.array([[arm_med_by_algo[lbl][arm] for arm in arms_sorted]
+                         for lbl in algo_labels])
+    spread_min = all_meds.min(axis=0)
+    spread_max = all_meds.max(axis=0)
+    spread = spread_max - spread_min
+    ax3.fill_between(x, spread_min, spread_max, alpha=0.12, color="grey",
+                     label="Écart inter-algo")
+
+    # Annoter l'écart au-dessus de chaque bras
+    for xi, arm, sp in zip(x, arms_sorted, spread):
+        ax3.text(xi, spread_max[xi] + sentinel * 0.01, f"Δ={sp:.0f}",
+                 ha="center", va="bottom", fontsize=7.5, color="grey")
+
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(arm_labels, fontsize=9)
+    ax3.set_ylabel("Médiane du temps de 1ʳᵉ détection (t)")
+    ax3.set_title(f"Robustesse temporelle — écart inter-algo ({mode})\n"
+                  f"Bande grise = range [min, max] des médianes. Bras triés par moyenne des médianes. Δ petit → algos concordants.")
+    ax3.legend(fontsize=8, loc="upper left")
+    for xi, arm in enumerate(arms_sorted):
+        ax3.axvspan(xi - 0.45, xi + 0.45, alpha=0.04,
+                    color="#00c000" if true_means[arm] > ref else "#c00000")
+    ax3.grid(True, axis="y", alpha=0.3)
+    plt.tight_layout()
+
+    return fig, fig2, fig3
+
+
+def plot_discovery_sequence_heatmap(results, mode="adaptive"):
+    """
+    Heatmap algo × séquence-exacte.
+    Chaque cellule = nb de simulations où l'algo a produit exactement cette séquence ordonnée.
+    """
+    from collections import Counter
+
+    dt_key   = "disc_times_adapt" if mode == "adaptive" else "disc_times_unif"
+    lpos_key = "l_pos_adapt"      if mode == "adaptive" else "l_pos_unif"
+
+    algo_labels = [lbl for lbl in results
+                   if dt_key in results[lbl] and lpos_key in results[lbl]]
+    if not algo_labels:
+        return None, []
+
+    # --- Construire la séquence ordonnée pour chaque (algo, simulation) ---
+    all_sequences = {}
+    for lbl in algo_labels:
+        dt_list   = results[lbl][dt_key]
+        lpos_list = results[lbl][lpos_key]
+        seqs = []
+        for dt, s_t in zip(dt_list, lpos_list):
+            ordered = sorted(s_t, key=lambda a: (dt.get(int(a), 0), int(a)))
+            seqs.append(tuple(int(a) for a in ordered))
+        all_sequences[lbl] = seqs
+
+    # --- Fréquence globale de chaque séquence unique ---
+    global_counter = Counter(
+        seq for seqs in all_sequences.values() for seq in seqs
+    )
+    n_unique = len(global_counter)
+    top_n    = min(10, n_unique)
+    top_seqs = [seq for seq, _ in global_counter.most_common(top_n)]
+    top_idx  = {seq: i for i, seq in enumerate(top_seqs)}
+    has_others = n_unique > 10
+
+    col_names = [f"L{i+1}" for i in range(len(top_seqs))]
+    if has_others:
+        col_names.append("Autres")
+    n_cols = len(col_names)
+
+    # --- Remplir la matrice ---
+    matrix = np.zeros((len(algo_labels), n_cols), dtype=int)
+    for i, lbl in enumerate(algo_labels):
+        for seq in all_sequences[lbl]:
+            if seq in top_idx:
+                matrix[i, top_idx[seq]] += 1
+            elif has_others:
+                matrix[i, -1] += 1
+
+    # --- Figure ---
+    fig_w = max(6, n_cols * 1.15)
+    fig_h = max(2.5, len(algo_labels) * 1.0 + 0.6)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    max_val = matrix.max() if matrix.max() > 0 else 1
+    im = ax.imshow(matrix, cmap="Greens", aspect="auto", vmin=0, vmax=max_val)
+    plt.colorbar(im, ax=ax, label="Nombre de simulations", fraction=0.03, pad=0.02)
+
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels(col_names, fontsize=10)
+    ax.set_yticks(range(len(algo_labels)))
+    ax.set_yticklabels(algo_labels, fontsize=11)
+
+    for i in range(len(algo_labels)):
+        for j in range(n_cols):
+            val = matrix[i, j]
+            text_color = "white" if val > max_val * 0.6 else "black"
+            ax.text(j, i, str(val), ha="center", va="center",
+                    fontsize=12, fontweight="bold", color=text_color)
+
+    ax.set_title(
+        f"Séquences exactes de découverte ({mode}) — {n_unique} séquence(s) unique(s)\n"
+        f"Top {top_n} affichées" + (" + colonne Autres" if has_others else ""),
+        fontsize=11,
+    )
+    ax.set_xlabel("Séquence de découverte")
+    ax.set_ylabel("Algorithme")
+    plt.tight_layout()
+
+    # --- Légende ---
+    legend_lines = []
+    for k, seq in enumerate(top_seqs):
+        seq_list = list(seq)
+        if len(seq_list) > 8:
+            disp = str(seq_list[:8])[:-1] + f", ...] (k={len(seq_list)})"
+        else:
+            disp = str(seq_list)
+        freq = global_counter[seq]
+        legend_lines.append(
+            f"**L{k+1}** = {disp} — {freq} occurrence(s) au total"
+        )
+
+    return fig, legend_lines
+
+
 def render_algorithm_comparison(comparison_payload, cfg):
     results = comparison_payload["results"]
     errors = comparison_payload.get("errors", {})
@@ -928,6 +1241,8 @@ def render_algorithm_comparison(comparison_payload, cfg):
         "Confusion counts",
         "Discovery speed",
         "Summary table",
+        "Ordre de détection",
+        "Séquences exactes",
     ])
     with tabs[0]:
         st.pyplot(plot_algo_comparison_tpr_curves(results, cfg))
@@ -943,6 +1258,64 @@ def render_algorithm_comparison(comparison_payload, cfg):
         plt.close()
     with tabs[4]:
         st.dataframe(summary_df, use_container_width=True)
+    with tabs[5]:
+        st.subheader("Ordre de détection — comparaison multi-algorithmes")
+        mode_sel = st.radio(
+            "Mode à afficher",
+            ["adaptive", "uniform"],
+            horizontal=True,
+            key="det_order_mode",
+        )
+        fig_det, fig_tau, fig_rob = plot_algo_comparison_detection_order(results, cfg, mode=mode_sel)
+        if fig_det:
+            st.pyplot(fig_det)
+            plt.close(fig_det)
+            st.caption(
+                "Chaque boîte = distribution des temps de 1ʳᵉ détection sur les simulations. "
+                "Annotation : rang médian [IC 95% bootstrap]. Bras triés par médiane du 1ᵉʳ algo."
+            )
+            st.divider()
+            st.markdown("#### Robustesse temporelle — écart inter-algo")
+            st.pyplot(fig_rob)
+            plt.close(fig_rob)
+            st.caption(
+                "Un Δ faible signifie que tous les algos détectent ce bras au même moment → robustesse. "
+                "Un Δ élevé révèle un bras pour lequel les algos divergent en vitesse."
+            )
+            st.divider()
+            st.markdown("#### Concordance des ordres — Kendall τ")
+            st.pyplot(fig_tau)
+            plt.close(fig_tau)
+            st.caption(
+                "τ = 1 : même ordre de détection. τ = −1 : ordre inversé. "
+                "* p<0.05, ** p<0.01 (test bilatéral)."
+            )
+        else:
+            st.info("Les données de temps de détection ne sont pas disponibles pour ce résultat.")
+
+    with tabs[6]:
+        st.subheader("Séquences exactes de découverte")
+        mode_seq = st.radio(
+            "Mode",
+            ["adaptive", "uniform"],
+            horizontal=True,
+            key="seq_heatmap_mode",
+        )
+        fig_seq, legend_lines = plot_discovery_sequence_heatmap(results, mode=mode_seq)
+        if fig_seq:
+            st.pyplot(fig_seq)
+            plt.close(fig_seq)
+            st.divider()
+            st.markdown("**Légende des séquences :**")
+            for line in legend_lines:
+                st.markdown(line)
+            st.caption(
+                "Chaque colonne Lk correspond à une séquence ordonnée de bras découverts "
+                "(tri par temps de 1ʳᵉ détection, puis par arm_id). "
+                "Une cellule verte foncée = l'algorithme produit souvent cet ordre exact."
+            )
+        else:
+            st.info("Données de séquences non disponibles.")
 
 def plot_detection_order(disc_times_adapt, disc_times_unif, true_means, mu_0,
                          variable_mu_choice=False, control_arm=None, horizon=None):

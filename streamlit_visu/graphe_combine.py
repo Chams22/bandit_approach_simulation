@@ -15,9 +15,9 @@ RESULTS_DIR = "batch_results"  # ou "saved_simulations"
 # Remplace les noms par les vrais noms de tes fichiers
 SIMULATIONS = {
     "1 / 9" : "sim_1777028900697.pkl",   # remplace par le vrai nom
-    "3 / 7" : "sim_1778246856902.pkl",
+    
     "5 / 5" : "sim_1778246905765.pkl",
-    "7 / 3" : "sim_1778246962658.pkl",
+    
     "9 / 1" : "sim_1778246962658.pkl",
 }
 
