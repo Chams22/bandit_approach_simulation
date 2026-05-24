@@ -8,6 +8,9 @@ import pickle
 from pathlib import Path
 import hashlib
 import ast
+import time
+import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib.pyplot as plt
 from statistics import mean, variance
@@ -47,11 +50,27 @@ USE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_USE_CACHE", "0").lower() in {"1
 SAVE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_SAVE_CACHE", "1").lower() not in {"0", "false", "no"}
 GENERATE_ALGO_COMPARISON = os.environ.get("REAL_DATA_COMPARE_ALGOS", "1").lower() not in {"0", "false", "no"}
 ONLY_COMPARISON_PLOTS = os.environ.get("REAL_DATA_ONLY_COMPARISON", "0").lower() in {"1", "true", "yes"}
+ONLY_KENDALL_HEATMAPS = os.environ.get("REAL_DATA_ONLY_KENDALL_HEATMAPS", "0").lower() in {"1", "true", "yes"}
+ONLY_REPLOT = os.environ.get("REAL_DATA_ONLY_REPLOT", "0").lower() in {"1", "true", "yes"}
+WALMART_BIG_INIT_SPECIAL = os.environ.get("REAL_DATA_WALMART_BIG_INIT", "0").lower() in {"1", "true", "yes"}
+WALMART_BIG_INIT_PERCENT = int(os.environ.get("REAL_DATA_WALMART_BIG_INIT_PERCENT", "50"))
+WALMART_BIG_INIT_PERCENTS_RAW = os.environ.get("REAL_DATA_WALMART_BIG_INIT_PERCENTS", "30,50,70")
+if ONLY_REPLOT:
+    USE_EXPERIMENT_CACHE = True
+    SAVE_EXPERIMENT_CACHE = False
+    ONLY_COMPARISON_PLOTS = False
+    GENERATE_ALGO_COMPARISON = True
+    WALMART_BIG_INIT_SPECIAL = False
+CACHE_READ_ONLY_MODE = USE_EXPERIMENT_CACHE and not SAVE_EXPERIMENT_CACHE
 STOP_RULE = os.environ.get("REAL_DATA_STOP_RULE", "horizon").lower()
 ADAPTIVE_STOP_MAX_MULTIPLIER = max(
     1,
     int(os.environ.get("REAL_DATA_ADAPTIVE_STOP_MAX_MULTIPLIER", "5")),
 )
+PARALLEL_ALGO_RUNS = os.environ.get("REAL_DATA_PARALLEL_ALGOS", "1").lower() not in {"0", "false", "no"}
+PARALLEL_MODE_RUNS = os.environ.get("REAL_DATA_PARALLEL_MODES", "1").lower() not in {"0", "false", "no"}
+ALGO_WORKERS = max(1, int(os.environ.get("REAL_DATA_ALGO_WORKERS", str(os.cpu_count() or 1))))
+MODE_WORKERS = max(1, int(os.environ.get("REAL_DATA_MODE_WORKERS", "4")))
 EFFORT_BOOTSTRAP_SHORT_INIT_ARMS = os.environ.get(
     "REAL_DATA_EFFORT_BOOTSTRAP_SHORT_INIT_ARMS", "1"
 ).lower() not in {"0", "false", "no"}
@@ -164,6 +183,24 @@ def _prompt_optional_int(label, default_value=None, min_value=0):
                 return None
 
 
+def _parse_percent_list(raw, default=(30, 50, 70)):
+    values = []
+    if raw is None:
+        raw = ",".join(str(value) for value in default)
+    for part in str(raw).replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(float(part))
+        except ValueError:
+            continue
+        values.append(max(0, min(100, value)))
+    if not values:
+        values = list(default)
+    return sorted(dict.fromkeys(values))
+
+
 def configure_from_interactive_input():
     if __name__ != "__main__":
         return
@@ -176,27 +213,70 @@ def configure_from_interactive_input():
 
     print("\n=== Interactive real-data configuration ===")
     print("Press Enter to keep the value shown in brackets.")
-    print("Available algorithms: simple, v2, v3, sr, all")
-    print("Available datasets: penn, exercise, effort, walmart, all")
+    only_replot = _prompt_bool(
+        "Only replot real-data figures from existing caches",
+        _env_truthy(os.environ.get("REAL_DATA_ONLY_REPLOT", "0")),
+    )
 
+    print("Available algorithms: simple, v2, v3, sr, all")
     default_algos = os.environ.get(
         "REAL_DATA_ALGOS",
         os.environ.get("REAL_DATA_ALGO", _format_choice(DEFAULT_RUN_ALGOS)),
-    )
-    default_datasets = os.environ.get(
-        "REAL_DATA_DATASETS",
-        os.environ.get("REAL_DATA_DATASET", _format_choice(DEFAULT_RUN_DATASETS)),
     )
     selected_algos = _prompt_text(
         "Algorithms to run",
         default_algos,
         ALGORITHM_CONFIGS.keys(),
     )
+
+    print("Available datasets: penn, exercise, effort, walmart, all")
+    default_datasets = os.environ.get(
+        "REAL_DATA_DATASETS",
+        os.environ.get("REAL_DATA_DATASET", _format_choice(DEFAULT_RUN_DATASETS)),
+    )
     selected_datasets = _prompt_text(
         "Datasets to run",
         default_datasets,
         DATASET_KEYS,
     )
+
+    if only_replot:
+        os.environ["REAL_DATA_ALGOS"] = selected_algos
+        os.environ.pop("REAL_DATA_ALGO", None)
+        os.environ["REAL_DATA_DATASETS"] = selected_datasets
+        os.environ.pop("REAL_DATA_DATASET", None)
+        os.environ["REAL_DATA_USE_CACHE"] = "1"
+        os.environ["REAL_DATA_SAVE_CACHE"] = "0"
+        os.environ["REAL_DATA_ONLY_COMPARISON"] = "0"
+        os.environ["REAL_DATA_COMPARE_ALGOS"] = "1"
+        os.environ["REAL_DATA_ONLY_REPLOT"] = "1"
+        os.environ["REAL_DATA_ONLY_KENDALL_HEATMAPS"] = "0"
+        os.environ["REAL_DATA_WALMART_BIG_INIT"] = "0"
+        os.environ["REAL_DATA_PARALLEL_ALGOS"] = "0"
+        os.environ["REAL_DATA_PARALLEL_MODES"] = "0"
+        print("===========================================\n")
+        return
+
+    run_walmart_big_init = _prompt_bool(
+        "Run special Walmart large-init experiment",
+        _env_truthy(os.environ.get("REAL_DATA_WALMART_BIG_INIT", "0")),
+    )
+
+    if run_walmart_big_init:
+        os.environ["REAL_DATA_ALGOS"] = selected_algos
+        os.environ.pop("REAL_DATA_ALGO", None)
+        os.environ["REAL_DATA_DATASETS"] = "walmart"
+        os.environ.pop("REAL_DATA_DATASET", None)
+        os.environ["REAL_DATA_WALMART_BIG_INIT"] = "1"
+        os.environ.setdefault("REAL_DATA_WALMART_BIG_INIT_PERCENTS", "30,50,70")
+        os.environ["REAL_DATA_COMPARE_ALGOS"] = "0"
+        os.environ["REAL_DATA_ONLY_COMPARISON"] = "1"
+        os.environ["REAL_DATA_USE_CACHE"] = "1"
+        os.environ["REAL_DATA_SAVE_CACHE"] = "1"
+        os.environ["REAL_DATA_ONLY_REPLOT"] = "0"
+        print("===========================================\n")
+        return
+
     use_cache = _prompt_bool(
         "Use existing run_experiment cache when available",
         _env_truthy(os.environ.get("REAL_DATA_USE_CACHE", "0")),
@@ -213,6 +293,23 @@ def configure_from_interactive_input():
         "Generate algorithm comparison figures",
         not _env_falsey(os.environ.get("REAL_DATA_COMPARE_ALGOS", "1")),
     )
+    only_kendall_heatmaps = _prompt_bool(
+        "Only create Kendall adaptive-order heatmaps from cache",
+        _env_truthy(os.environ.get("REAL_DATA_ONLY_KENDALL_HEATMAPS", "0")),
+    )
+    if only_kendall_heatmaps:
+        os.environ["REAL_DATA_ALGOS"] = selected_algos
+        os.environ.pop("REAL_DATA_ALGO", None)
+        os.environ["REAL_DATA_DATASETS"] = selected_datasets
+        os.environ.pop("REAL_DATA_DATASET", None)
+        os.environ["REAL_DATA_USE_CACHE"] = "1"
+        os.environ["REAL_DATA_SAVE_CACHE"] = "0"
+        os.environ["REAL_DATA_ONLY_COMPARISON"] = "1"
+        os.environ["REAL_DATA_COMPARE_ALGOS"] = "1"
+        os.environ["REAL_DATA_ONLY_KENDALL_HEATMAPS"] = "1"
+        os.environ["REAL_DATA_ONLY_REPLOT"] = "0"
+        print("===========================================\n")
+        return
     default_stop_rule = os.environ.get("REAL_DATA_STOP_RULE", "horizon").lower()
     if default_stop_rule in {"h", "horizon"}:
         default_stop_rule = "h"
@@ -239,6 +336,9 @@ def configure_from_interactive_input():
     os.environ["REAL_DATA_SAVE_CACHE"] = "1" if save_cache else "0"
     os.environ["REAL_DATA_ONLY_COMPARISON"] = "0" if generate_classic_plots else "1"
     os.environ["REAL_DATA_COMPARE_ALGOS"] = "1" if generate_comparison else "0"
+    os.environ["REAL_DATA_ONLY_REPLOT"] = "0"
+    os.environ["REAL_DATA_ONLY_KENDALL_HEATMAPS"] = "0"
+    os.environ["REAL_DATA_WALMART_BIG_INIT"] = "0"
     os.environ["REAL_DATA_STOP_RULE"] = {
         "h": "horizon",
         "a": "adaptive_classic_all_non_control_arms",
@@ -258,15 +358,29 @@ USE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_USE_CACHE", "0").lower() in {"1
 SAVE_EXPERIMENT_CACHE = os.environ.get("REAL_DATA_SAVE_CACHE", "1").lower() not in {"0", "false", "no"}
 GENERATE_ALGO_COMPARISON = os.environ.get("REAL_DATA_COMPARE_ALGOS", "1").lower() not in {"0", "false", "no"}
 ONLY_COMPARISON_PLOTS = os.environ.get("REAL_DATA_ONLY_COMPARISON", "0").lower() in {"1", "true", "yes"}
+ONLY_KENDALL_HEATMAPS = os.environ.get("REAL_DATA_ONLY_KENDALL_HEATMAPS", "0").lower() in {"1", "true", "yes"}
+ONLY_REPLOT = os.environ.get("REAL_DATA_ONLY_REPLOT", "0").lower() in {"1", "true", "yes"}
+WALMART_BIG_INIT_SPECIAL = os.environ.get("REAL_DATA_WALMART_BIG_INIT", "0").lower() in {"1", "true", "yes"}
+WALMART_BIG_INIT_PERCENT = int(os.environ.get("REAL_DATA_WALMART_BIG_INIT_PERCENT", "50"))
+WALMART_BIG_INIT_PERCENTS_RAW = os.environ.get("REAL_DATA_WALMART_BIG_INIT_PERCENTS", "30,50,70")
+CACHE_READ_ONLY_MODE = USE_EXPERIMENT_CACHE and not SAVE_EXPERIMENT_CACHE
 STOP_RULE = os.environ.get("REAL_DATA_STOP_RULE", "horizon").lower()
 ADAPTIVE_STOP_MAX_MULTIPLIER = max(
     1,
     int(os.environ.get("REAL_DATA_ADAPTIVE_STOP_MAX_MULTIPLIER", "5")),
 )
+PARALLEL_ALGO_RUNS = os.environ.get("REAL_DATA_PARALLEL_ALGOS", "1").lower() not in {"0", "false", "no"}
+PARALLEL_MODE_RUNS = os.environ.get("REAL_DATA_PARALLEL_MODES", "1").lower() not in {"0", "false", "no"}
+if ONLY_REPLOT:
+    PARALLEL_ALGO_RUNS = False
+    PARALLEL_MODE_RUNS = False
+ALGO_WORKERS = max(1, int(os.environ.get("REAL_DATA_ALGO_WORKERS", str(os.cpu_count() or 1))))
+MODE_WORKERS = max(1, int(os.environ.get("REAL_DATA_MODE_WORKERS", "4")))
 EFFORT_BOOTSTRAP_SHORT_INIT_ARMS = os.environ.get(
     "REAL_DATA_EFFORT_BOOTSTRAP_SHORT_INIT_ARMS", "1"
 ).lower() not in {"0", "false", "no"}
 EFFORT_INIT_BOOTSTRAP_SEED = int(os.environ.get("REAL_DATA_EFFORT_INIT_BOOTSTRAP_SEED", "12345"))
+WALMART_BIG_INIT_PERCENTS = _parse_percent_list(WALMART_BIG_INIT_PERCENTS_RAW)
 
 RUN_ALGOS = parse_selection(
     os.environ.get("REAL_DATA_ALGOS", os.environ.get("REAL_DATA_ALGO")),
@@ -292,6 +406,9 @@ if invalid_datasets:
     raise ValueError(
         f"Unknown REAL_DATA_DATASET(S)={invalid_datasets!r}. Choose one or more of: {valid}"
     )
+
+if WALMART_BIG_INIT_SPECIAL:
+    RUN_DATASETS = ["walmart"]
 
 if STOP_RULE in {
     "a",
@@ -326,10 +443,10 @@ if STOP_RULE not in {
 
 
 MODE_SPECS = [
-    ("UNIF", "Uniform", "pnb_unif", "l_pos_unif", "discovery_unif", ":"),
-    ("UNIF VAR", "Uniform Var", "pnb_unif_v", "l_pos_unif_v", "discovery_unif_v", "-."),
-    ("ADAPT", "Adaptive", "pnb_adapt", "l_pos_adapt", "discovery_adapt", "-"),
-    ("ADAPT VAR", "Adaptive Var", "pnb_adapt_v", "l_pos_adapt_v", "discovery_adapt_v", "--"),
+    ("UNIF", "Uniforme", "pnb_unif", "l_pos_unif", "discovery_unif", ":"),
+    ("UNIF VAR", "Uniforme controle online", "pnb_unif_v", "l_pos_unif_v", "discovery_unif_v", "-."),
+    ("ADAPT", "Adaptatif", "pnb_adapt", "l_pos_adapt", "discovery_adapt", "-"),
+    ("ADAPT VAR", "Adaptatif controle online", "pnb_adapt_v", "l_pos_adapt_v", "discovery_adapt_v", "--"),
 ]
 
 
@@ -530,9 +647,86 @@ def _truncate_adaptive_probe_results(probe_results, source_horizon, target_horiz
     )
 
 
-def _probe_results_as_run_results(probe_results):
-    """The stopping probe is already the definitive run for its own mode."""
-    return probe_results
+def _probe_results_as_run_results(probe_results, source_horizon, target_horizon,
+                                  history_record_every):
+    """Use a stopping probe as the definitive run, trimmed to the final horizon."""
+    source_horizon = int(source_horizon)
+    target_horizon = int(target_horizon)
+    if source_horizon <= target_horizon:
+        return probe_results
+    return _truncate_adaptive_probe_results(
+        probe_results,
+        source_horizon,
+        target_horizon,
+        history_record_every,
+    )
+
+
+def _mode_cache_tuple(payload, suffix):
+    return (
+        payload[f"pnb_{suffix}"],
+        payload.get(f"pnb_{suffix}_list"),
+        payload[f"counts_{suffix}_mean"],
+        payload[f"counts_{suffix}_list"],
+        payload[f"np_p_value_list_{suffix}"],
+        payload[f"np_p_value_mean_{suffix}"],
+        payload[f"l_pos_{suffix}"],
+        payload[f"discovery_{suffix}"],
+        payload[f"bootstrap_{suffix}"],
+    )
+
+
+def _assign_mode_cache_tuple(payload, suffix, results):
+    (
+        payload[f"pnb_{suffix}"],
+        payload[f"pnb_{suffix}_list"],
+        payload[f"counts_{suffix}_mean"],
+        payload[f"counts_{suffix}_list"],
+        payload[f"np_p_value_list_{suffix}"],
+        payload[f"np_p_value_mean_{suffix}"],
+        payload[f"l_pos_{suffix}"],
+        payload[f"discovery_{suffix}"],
+        payload[f"bootstrap_{suffix}"],
+    ) = results
+
+
+def _normalize_stopping_probe_cache_payload(payload, history_record_every):
+    """
+    Repair caches created from a stopping probe whose raw curve kept the full
+    probe horizon even though the final analysis horizon is the stopping time.
+    """
+    try:
+        target_horizon = int(payload.get("horizon", 0))
+    except (TypeError, ValueError):
+        return []
+    if target_horizon <= 0:
+        return []
+
+    stop_rule = payload.get("stop_rule")
+    if stop_rule == "uniform_classic_all_non_control_arms":
+        candidate_suffixes = ["unif"]
+    elif stop_rule == "adaptive_classic_all_non_control_arms":
+        candidate_suffixes = ["adapt"]
+    else:
+        candidate_suffixes = []
+
+    normalized = []
+    for suffix in candidate_suffixes:
+        curve = payload.get(f"pnb_{suffix}")
+        if curve is None:
+            continue
+        source_horizon = len(curve)
+        if source_horizon <= target_horizon:
+            continue
+        trimmed = _truncate_adaptive_probe_results(
+            _mode_cache_tuple(payload, suffix),
+            source_horizon,
+            target_horizon,
+            history_record_every,
+        )
+        _assign_mode_cache_tuple(payload, suffix, trimmed)
+        normalized.append(suffix)
+    return normalized
 
 
 def _initialization_cost(init_nb, n_arms, init_choice=True):
@@ -564,6 +758,44 @@ def _add_initialization_band(ax, init_cost, y_bottom, label=None):
         va="center",
         fontsize=8,
         color="#555555",
+    )
+
+
+def _add_total_budget_initialization_band(ax, init_cost, color, label=None):
+    if init_cost <= 0:
+        return None
+    return ax.axvspan(
+        0,
+        init_cost,
+        color=color,
+        alpha=0.12,
+        label=label or "_nolegend_",
+        zorder=0,
+    )
+
+
+def _savefig_with_permission_fallback(path, **kwargs):
+    path = Path(path)
+    try:
+        plt.savefig(path, **kwargs)
+        return path
+    except PermissionError as exc:
+        fallback = path.with_name(f"{path.stem}_updated_{int(time.time())}{path.suffix}")
+        print(f"[plot] could not overwrite {path}: {exc}")
+        print(f"[plot] writing fallback figure to {fallback}")
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format=path.suffix.lstrip(".") or "png", **kwargs)
+        fallback.write_bytes(buffer.getvalue())
+        return fallback
+
+
+def _legend_outside_right(ax, **kwargs):
+    return ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        borderaxespad=0.0,
+        frameon=True,
+        **kwargs,
     )
 
 
@@ -728,7 +960,7 @@ def _prepare_same_set_heatmap(rows_df, left_col, right_col):
 def _draw_same_set_heatmap(ax, prepared, title, max_abs=None, show_counts=False):
     if prepared is None:
         ax.axis("off")
-        ax.text(0.5, 0.5, "No identical discovered-set prefixes",
+        ax.text(0.5, 0.5, "Aucun prefixe de set decouvert identique",
                 transform=ax.transAxes, ha="center", va="center",
                 color="gray", fontsize=10)
         ax.set_title(title)
@@ -761,8 +993,8 @@ def _draw_same_set_heatmap(ax, prepared, title, max_abs=None, show_counts=False)
                     fontsize=fontsize, color=text_color)
 
     ax.set_title(title)
-    ax.set_xlabel("Discovered-set size k")
-    ax.set_ylabel("Comparison: method B - method A")
+    ax.set_xlabel("Taille k du set decouvert")
+    ax.set_ylabel("Comparaison : methode B - methode A")
     ax.set_xticks(np.arange(len(k_values)))
     ax.set_xticklabels(k_values)
     ax.set_yticks(np.arange(len(pair_labels)))
@@ -811,7 +1043,7 @@ def _mean_discovery_sequence(discovery_list):
 def _draw_discovery_sequence_table(
     ax,
     method_specs,
-    title="Discovery order by mode: cell = discovered arm, then first discovery time",
+    title="Ordre de decouverte par mode : bras decouvert puis premier temps de decouverte",
     control_arm=None,
     displayed_ranks=None,
 ):
@@ -822,7 +1054,7 @@ def _draw_discovery_sequence_table(
     max_rank = max((max(seq) for _, seq in sequences if seq), default=0)
     ax.axis("off")
     if max_rank == 0:
-        ax.text(0.5, 0.5, "No discoveries to summarize",
+        ax.text(0.5, 0.5, "Aucune decouverte a resumer",
                 transform=ax.transAxes, ha="center", va="center",
                 color="gray", fontsize=10)
         return
@@ -875,7 +1107,7 @@ def _draw_discovery_sequence_table(
             cell.set_facecolor("#ffb3b3")
             cell.set_edgecolor("#b30000")
             cell.set_text_props(color="#7a0000", weight="bold")
-    title_suffix = " | red cell = control arm" if control_arm is not None else ""
+    title_suffix = " | cellule rouge = controle" if control_arm is not None else ""
     ax.set_title(title + title_suffix, fontsize=10, fontweight="bold", pad=12)
 
 
@@ -937,15 +1169,15 @@ def write_same_set_discovery_comparison(method_specs, csv_path, figure_path, tit
     )
     if image is not None:
         cbar = fig.colorbar(image, ax=heatmap_ax, shrink=0.88)
-        cbar.set_label("Mean time difference: method B - method A")
+        cbar.set_label("Difference de temps moyenne : methode B - methode A")
     fig.suptitle(
-        "Same discovered-set discovery-time comparison\n"
-        "Cells are filled only when both methods have found exactly the same set of arms at size k.",
+        "Comparaison des temps de decouverte du meme set\n"
+        "Les cellules sont remplies seulement quand les deux methodes ont trouve exactement le meme set de bras a la taille k.",
         fontsize=12,
         fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0, 1, 0.91))
-    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(figure_path, dpi=300, bbox_inches="tight")
     plt.close()
     return rows_df
 
@@ -1010,6 +1242,8 @@ def generate_algorithm_comparison_figures(project_root, algo_keys, dataset_keys)
     _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir)
     _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, output_dir)
     _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors, output_dir)
+    _plot_adapt_vs_uniform_gap_heatmap(cached, algo_keys, dataset_keys, output_dir)
+    _plot_adaptive_order_kendall_heatmaps(cached, algo_keys, dataset_keys, output_dir)
     print(f"[comparison] wrote algorithm comparison figures to {output_dir}")
 
 
@@ -1022,6 +1256,7 @@ def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, out
     for ax, dataset_key in zip(flat_axes, dataset_keys):
         plotted = False
         max_x = 1.0
+        max_useful_x = 0.0
         max_y = 1.0
         init_costs = []
         for algo_key in algo_keys:
@@ -1042,10 +1277,16 @@ def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, out
                 payload.get("history_record_every", 1),
             )
             y_values = curve
+            if y_values.size > 1:
+                change_idx = np.flatnonzero(np.diff(y_values) != 0) + 1
+                if change_idx.size:
+                    max_useful_x = max(max_useful_x, float(x_axis[change_idx[-1]]))
+            elif y_values.size == 1 and y_values[0] > 0:
+                max_useful_x = max(max_useful_x, float(x_axis[0]))
             ax.plot(
                 x_axis,
                 y_values,
-                label=f"{_display_algo_name(algo_key)} - Adaptive",
+                label=f"{_display_algo_name(algo_key)} - Adaptatif",
                 color=algo_colors.get(algo_key, "black"),
                 linestyle="-",
                 linewidth=2.1,
@@ -1056,7 +1297,7 @@ def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, out
             plotted = True
         init_cost = max(init_costs) if init_costs else 0
         y_bottom = -0.10 * max_y
-        _add_initialization_band(ax, init_cost, y_bottom, label="Initialization budget")
+        _add_initialization_band(ax, init_cost, y_bottom, label="Budget d'initialisation")
         n_true = None
         for algo_key in algo_keys:
             payload = cached.get((algo_key, dataset_key))
@@ -1066,14 +1307,18 @@ def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, out
         if n_true:
             ax.axhline(n_true, color="black", linestyle=":", linewidth=1.0, alpha=0.5,
                        label="_nolegend_")
-        ax.set_title(f"{dataset_key.upper()} - adaptive discovery trajectory")
-        ax.set_ylabel("Detected positives")
-        ax.set_xlabel("Rounds after initialization")
+        ax.set_title(f"{dataset_key.upper()} - trajectoire de decouverte adaptative")
+        ax.set_ylabel("Bras positifs detectes")
+        ax.set_xlabel("Tirages apres initialisation")
         ax.set_ylim(y_bottom * 1.15, max_y * 1.08)
-        ax.set_xlim(-init_cost if init_cost > 0 else 0, max(max_x, 1))
+        if max_useful_x > 0:
+            x_right = min(max_x, max(1.0, max_useful_x * 1.10))
+        else:
+            x_right = min(max_x, 1.0)
+        ax.set_xlim(-init_cost if init_cost > 0 else 0, max(x_right, 1))
         ax.grid(True, alpha=0.25)
         if not plotted:
-            ax.text(0.5, 0.5, "No cached result", transform=ax.transAxes,
+            ax.text(0.5, 0.5, "Aucun cache disponible", transform=ax.transAxes,
                     ha="center", va="center", color="gray")
 
     for ax in flat_axes[len(dataset_keys):]:
@@ -1084,12 +1329,12 @@ def _plot_positive_rate_curves(cached, algo_keys, dataset_keys, algo_colors, out
         fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)),
                    fontsize=8, bbox_to_anchor=(0.5, -0.01))
     fig.suptitle(
-        "Algorithm comparison: adaptive discovery trajectories\n"
-        "Only the classic Adaptive mode is shown. Y-axis is the raw number of detected positive arms.",
+        "Comparaison des algorithmes : trajectoires de decouverte adaptative\n"
+        "Seul le mode adaptatif classique est affiche. L'axe y donne le nombre brut de bras positifs detectes.",
         fontsize=14, fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.04, 1, 0.94))
-    plt.savefig(output_dir / "positive_rate_curves.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_dir / "positive_rate_curves.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -1116,11 +1361,11 @@ def _plot_found_positive_counts(summary_df, algo_keys, dataset_keys, output_dir)
         true_counts = subset.groupby("algorithm")["n_true_positives"].first()
         if not true_counts.empty:
             ax.axhline(float(true_counts.iloc[0]), color="black", linestyle=":",
-                       linewidth=1.2, label="Classical positive arms")
+                       linewidth=1.2, label="Bras positifs classiques")
         ax.set_title(dataset_key.upper())
         ax.set_xticks(x)
         ax.set_xticklabels([_display_algo_name(algo) for algo in algo_keys], rotation=35, ha="right")
-        ax.set_ylabel("Mean number of detected positive arms")
+        ax.set_ylabel("Nombre moyen de bras positifs detectes")
         ax.grid(axis="y", alpha=0.25)
 
     for ax in flat_axes[len(dataset_keys):]:
@@ -1130,12 +1375,12 @@ def _plot_found_positive_counts(summary_df, algo_keys, dataset_keys, output_dir)
     fig.legend(handles, labels, loc="lower center", ncol=min(5, len(labels)),
                bbox_to_anchor=(0.5, -0.03))
     fig.suptitle(
-        "Final discoveries by algorithm and sampling mode\n"
-        "Bars show the mean final number of discovered arms; dotted line shows the classical BH-positive count.",
+        "Decouvertes finales par algorithme et mode d'echantillonnage\n"
+        "Les barres donnent le nombre moyen de bras detectes ; la ligne pointillee donne le nombre positif par BH classique.",
         fontsize=14, fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.08, 1, 0.90))
-    plt.savefig(output_dir / "found_positive_counts.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_dir / "found_positive_counts.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -1177,8 +1422,8 @@ def _plot_confusion_counts(summary_df, algo_keys, dataset_keys, output_dir):
             ax.bar(x, values, bottom=bottoms, color=colors[key], edgecolor="white", label=key)
             bottoms += np.asarray(values)
 
-        ax.set_title(f"{dataset_key.upper()} - confusion counts")
-        ax.set_ylabel("Mean arm count")
+        ax.set_title(f"{dataset_key.upper()} - bilan de detection")
+        ax.set_ylabel("Nombre moyen de bras")
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
         ax.grid(axis="y", alpha=0.25)
@@ -1187,12 +1432,12 @@ def _plot_confusion_counts(summary_df, algo_keys, dataset_keys, output_dir):
     fig.legend(handles, labels, loc="lower center", ncol=4,
                bbox_to_anchor=(0.5, -0.02))
     fig.suptitle(
-        "Detection quality against classical positives\n"
-        "TP=true positive found, FP=false positive found, FN=classical positive missed, TN=correctly not found.",
+        "Qualite de detection par rapport aux positifs classiques\n"
+        "TP=positif trouve, FP=faux positif, FN=positif classique manque, TN=bras correctement non detecte.",
         fontsize=14, fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.06, 1, 0.93))
-    plt.savefig(output_dir / "confusion_counts.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_dir / "confusion_counts.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -1219,7 +1464,7 @@ def _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir):
         ax.set_title(dataset_key.upper())
         ax.set_xticks(x)
         ax.set_xticklabels([_display_algo_name(algo) for algo in algo_keys], rotation=35, ha="right")
-        ax.set_ylabel("Normalized area under discovery curve")
+        ax.set_ylabel("Aire normalisee sous la courbe de decouverte")
         ax.grid(axis="y", alpha=0.25)
 
     for ax in flat_axes[len(dataset_keys):]:
@@ -1229,12 +1474,12 @@ def _plot_discovery_auc(summary_df, algo_keys, dataset_keys, output_dir):
     fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)),
                bbox_to_anchor=(0.5, -0.03))
     fig.suptitle(
-        "Discovery speed score by algorithm\n"
-        "A larger area means positives were found earlier and/or more completely during the horizon.",
+        "Score de vitesse de decouverte par algorithme\n"
+        "Une aire plus grande signifie des positifs trouves plus tot et/ou plus completement pendant l'horizon.",
         fontsize=14, fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.08, 1, 0.90))
-    plt.savefig(output_dir / "discovery_speed_auc.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_dir / "discovery_speed_auc.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -1288,6 +1533,660 @@ def _largest_common_adaptive_set_record(cached, dataset_key, algo_keys):
     return candidates[0], None
 
 
+def _rank_map_on_arm_set(discovery_dict, arm_set):
+    arm_set = {int(arm) for arm in arm_set}
+    ordered = [
+        int(arm)
+        for arm, _ in sorted(
+            ((int(arm), int(time)) for arm, time in (discovery_dict or {}).items()),
+            key=lambda item: (item[1], item[0]),
+        )
+        if int(arm) in arm_set
+    ]
+    return {arm: rank for rank, arm in enumerate(ordered, start=1)}
+
+
+def _kendall_tau_from_rank_maps(rank_a, rank_b, arm_set):
+    arms = [int(arm) for arm in arm_set if int(arm) in rank_a and int(arm) in rank_b]
+    n = len(arms)
+    if n < 2:
+        return np.nan, n
+
+    concordant = 0
+    discordant = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            arm_i = arms[i]
+            arm_j = arms[j]
+            direction_a = rank_a[arm_i] - rank_a[arm_j]
+            direction_b = rank_b[arm_i] - rank_b[arm_j]
+            product = direction_a * direction_b
+            if product > 0:
+                concordant += 1
+            elif product < 0:
+                discordant += 1
+
+    total_pairs = n * (n - 1) / 2
+    if total_pairs == 0:
+        return np.nan, n
+    return float((concordant - discordant) / total_pairs), n
+
+
+def _plot_adaptive_order_kendall_heatmaps(cached, algo_keys, dataset_keys, output_dir):
+    dataset_keys = _ordered_comparison_datasets(dataset_keys)
+    algo_order = [algo for algo in ["simple", "v2", "v3", "sr"] if algo in algo_keys]
+    labels = [_display_algo_name(algo) for algo in algo_order]
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    matrices = {}
+    messages = {}
+    records = {}
+
+    for dataset_key in dataset_keys:
+        if len(algo_order) < 4:
+            messages[dataset_key] = "Caches JJ, V2, V3 et SR requis."
+            matrices[dataset_key] = np.full((len(algo_order), len(algo_order)), np.nan)
+            continue
+
+        record, message = _largest_common_adaptive_set_record(cached, dataset_key, algo_order)
+        records[dataset_key] = record
+        matrix = np.full((len(algo_order), len(algo_order)), np.nan)
+        if record is None:
+            messages[dataset_key] = message or "Aucun set adaptatif commun."
+            matrices[dataset_key] = matrix
+            continue
+
+        sim_idx = int(record["simulation"]) - 1
+        common_set = tuple(int(arm) for arm in record["common_set_tuple"])
+        rank_maps = {}
+        for algo_key in algo_order:
+            payload = cached.get((algo_key, dataset_key))
+            discovery_list = payload.get("discovery_adapt", []) if payload else []
+            discovery_dict = discovery_list[sim_idx] if sim_idx < len(discovery_list) else {}
+            rank_maps[algo_key] = _rank_map_on_arm_set(discovery_dict, common_set)
+
+        for i, algo_a in enumerate(algo_order):
+            for j, algo_b in enumerate(algo_order):
+                if i == j:
+                    tau = 1.0 if len(common_set) >= 2 else np.nan
+                    n_common = len(common_set)
+                else:
+                    tau, n_common = _kendall_tau_from_rank_maps(
+                        rank_maps[algo_a],
+                        rank_maps[algo_b],
+                        common_set,
+                    )
+                matrix[i, j] = tau
+                rows.append({
+                    "dataset": dataset_key,
+                    "simulation": record["simulation"],
+                    "k": record["k"],
+                    "common_set": record["common_set"],
+                    "algorithm_a": _display_algo_name(algo_a),
+                    "algorithm_b": _display_algo_name(algo_b),
+                    "kendall_tau": tau,
+                    "n_arms_compared": n_common,
+                })
+
+        matrices[dataset_key] = matrix
+
+    pd.DataFrame(rows).to_csv(
+        output_dir / "adaptive_order_kendall_largest_common_set.csv",
+        index=False,
+    )
+
+    ncols = min(2, max(1, len(dataset_keys)))
+    nrows = int(np.ceil(len(dataset_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7.4 * ncols, 6.0 * nrows), squeeze=False)
+    flat_axes = axes.ravel()
+    cmap = plt.get_cmap("coolwarm").copy()
+    cmap.set_bad(color="white")
+    last_image = None
+
+    for ax, dataset_key in zip(flat_axes, dataset_keys):
+        matrix = matrices.get(dataset_key)
+        if matrix is None or not labels:
+            ax.axis("off")
+            continue
+        masked = np.ma.masked_invalid(matrix)
+        image = ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
+        last_image = image
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels)
+        ax.set_yticklabels(labels)
+        ax.tick_params(axis="x", rotation=35)
+
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                value = matrix[i, j]
+                if np.isfinite(value):
+                    color = "white" if abs(value) > 0.65 else "black"
+                    ax.text(j, i, f"{value:.2f}", ha="center", va="center",
+                            color=color, fontsize=10, fontweight="bold")
+                else:
+                    ax.text(j, i, "NA", ha="center", va="center",
+                            color="#9e9e9e", fontsize=9)
+
+        ax.set_xticks(np.arange(-0.5, len(labels), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(labels), 1), minor=True)
+        ax.grid(which="minor", color="#d0d0d0", linewidth=0.8)
+        ax.tick_params(which="minor", bottom=False, left=False)
+
+        record = records.get(dataset_key)
+        if record is None:
+            ax.set_title(f"{dataset_key.upper()} - {messages.get(dataset_key, 'aucun set commun')}")
+        else:
+            ax.set_title(
+                f"{dataset_key.upper()} - tau de Kendall de l'ordre adaptatif\n"
+                f"plus grand set commun k={record['k']} | sim={record['simulation']}"
+            )
+
+    for ax in flat_axes[len(dataset_keys):]:
+        ax.axis("off")
+
+    if last_image is not None:
+        cbar = fig.colorbar(last_image, ax=flat_axes[:len(dataset_keys)], shrink=0.84)
+        cbar.set_label("Tau de Kendall sur l'ordre de decouverte")
+
+    fig.suptitle(
+        "Similarite de l'ordre de decouverte adaptatif sur le plus grand set commun\n"
+        "Seul le mode adaptatif classique est utilise ; chaque heatmap compare JJ, V2, V3 et SR depuis les caches.",
+        fontsize=14,
+        fontweight="bold",
+    )
+    _savefig_with_permission_fallback(
+        output_dir / "adaptive_order_kendall_heatmaps.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def _load_cache_or_none(cache_path):
+    try:
+        if Path(cache_path).exists():
+            return load_experiment_cache(cache_path)
+    except Exception as exc:
+        print(f"[cache] could not read {cache_path}: {exc}")
+    return None
+
+
+def _shift_discovery_times(discovery_list, init_cost):
+    shifted = []
+    for discovery_dict in discovery_list or []:
+        shifted.append({
+            int(arm): float(first_time) + float(init_cost)
+            for arm, first_time in (discovery_dict or {}).items()
+        })
+    return shifted
+
+
+def _first_discovery_dict(discovery_list):
+    if not discovery_list:
+        return {}
+    return discovery_list[0] or {}
+
+
+def _step_curve_from_discovery(discovery_list, init_cost, horizon, true_positives=None,
+                               normalize=False):
+    discovery_dict = _first_discovery_dict(discovery_list)
+    true_set = _as_int_set(true_positives) if true_positives is not None else None
+    events = []
+    for arm, first_time in discovery_dict.items():
+        arm = int(arm)
+        if true_set is not None and arm not in true_set:
+            continue
+        events.append(float(init_cost) + float(first_time))
+    events.sort()
+
+    x_values = [0.0]
+    y_values = [0.0]
+    count = 0
+    for event_time in events:
+        x_values.extend([event_time, event_time])
+        y_values.extend([count, count + 1])
+        count += 1
+
+    end_time = float(init_cost) + float(horizon)
+    x_values.append(max(end_time, x_values[-1] if x_values else 0.0))
+    y_values.append(count)
+
+    if normalize:
+        denom = max(1, len(true_set or []))
+        y_values = [value / denom for value in y_values]
+
+    return np.asarray(x_values, dtype=float), np.asarray(y_values, dtype=float)
+
+
+def _last_discovery_time(discovery_list):
+    discovery_dict = _first_discovery_dict(discovery_list)
+    if not discovery_dict:
+        return np.nan
+    return float(max(float(time) for time in discovery_dict.values()))
+
+
+def _payload_mode_summary_rows(payload, algorithm, init_type, init_percent,
+                               min_arm_size, modes):
+    rows = []
+    true_set = _as_int_set(payload.get("true_positives", []))
+    init_cost = _initialization_cost(
+        payload.get("init_nb", 0),
+        payload.get("n_arms", 0),
+        payload.get("init_choice", True),
+    )
+    for mode_label, suffix in modes:
+        discovery_list = payload.get(f"discovery_{suffix}", []) or []
+        discovery_dict = _first_discovery_dict(discovery_list)
+        discovered = _as_int_set(discovery_dict.keys())
+        tp_detected = len(discovered & true_set)
+        last_time = _last_discovery_time(discovery_list)
+        rows.append({
+            "algorithm": _display_algo_name(algorithm),
+            "mode": mode_label,
+            "init_type": init_type,
+            "init_percent": float(init_percent),
+            "init_nb": int(payload.get("init_nb", 0)),
+            "final_detected": len(discovered),
+            "final_true_positive_detected": tp_detected,
+            "tpr_final": tp_detected / max(1, len(true_set)),
+            "last_discovery_time": last_time,
+            "total_budget_last_discovery": (
+                float(init_cost) + last_time if np.isfinite(last_time) else np.nan
+            ),
+            "min_arm_size": int(min_arm_size),
+        })
+    return rows
+
+
+def _collect_walmart_big_init_payloads(project_root, algo_keys):
+    classic = {}
+    large = {}
+    for algo_key in algo_keys:
+        config = ALGORITHM_CONFIGS[algo_key]
+        classic_path = project_root / config["output_dir"] / "walmart" / CACHE_FILENAME
+        classic_payload = _load_cache_or_none(classic_path)
+        if classic_payload is not None:
+            classic[algo_key] = classic_payload
+        large[algo_key] = {}
+        for percent in WALMART_BIG_INIT_PERCENTS:
+            large_path = (
+                project_root
+                / config["output_dir"]
+                / "walmart_init_grand"
+                / f"init_{percent}"
+                / CACHE_FILENAME
+            )
+            large_payload = _load_cache_or_none(large_path)
+            if large_payload is None:
+                legacy_path = project_root / config["output_dir"] / "walmart_init_grand" / CACHE_FILENAME
+                legacy_payload = _load_cache_or_none(legacy_path)
+                if legacy_payload is not None and int(legacy_payload.get("init_percent", -1)) == percent:
+                    large_payload = legacy_payload
+            if large_payload is not None:
+                large[algo_key][percent] = large_payload
+    return classic, large
+
+
+def _plot_walmart_big_init_curves(classic_payloads, large_payloads, algo_keys,
+                                  output_dir, y_kind="count"):
+    ncols = 2
+    nrows = int(np.ceil(len(algo_keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(8.5 * ncols, 5.4 * nrows), squeeze=False)
+    flat_axes = axes.ravel()
+    is_tpr = y_kind == "tpr"
+
+    percent_colors = {
+        30: "#2ca02c",
+        50: "#1f77b4",
+        70: "#9467bd",
+    }
+    fallback_colors = plt.cm.viridis(np.linspace(0.25, 0.85, max(1, len(WALMART_BIG_INIT_PERCENTS))))
+
+    for ax, algo_key in zip(flat_axes, algo_keys):
+        plotted = False
+        max_x_useful = 1.0
+        max_y = 1.0
+        init_bands = {}
+
+        curve_specs = [
+            ("classic", None, "Uniforme init classique", "unif", "#ff7f0e", "--"),
+            ("classic", None, "Adaptatif init classique", "adapt", "#ff7f0e", "-"),
+        ]
+        for idx, percent in enumerate(WALMART_BIG_INIT_PERCENTS):
+            color = percent_colors.get(percent, fallback_colors[idx])
+            curve_specs.extend([
+                ("large", percent, f"Uniforme init {percent}%", "unif", color, "--"),
+                ("large", percent, f"Adaptatif init {percent}%", "adapt", color, "-"),
+            ])
+
+        for init_type, percent, label, suffix, color, linestyle in curve_specs:
+            if init_type == "classic":
+                payload = classic_payloads.get(algo_key)
+                init_key = "classic"
+            else:
+                payload = large_payloads.get(algo_key, {}).get(percent)
+                init_key = f"large_{percent}"
+            if payload is None:
+                continue
+            init_cost = _initialization_cost(
+                payload.get("init_nb", 0),
+                payload.get("n_arms", 0),
+                payload.get("init_choice", True),
+            )
+            init_bands[init_key] = (init_cost, color, label)
+            x_values, y_values = _step_curve_from_discovery(
+                payload.get(f"discovery_{suffix}", []),
+                init_cost,
+                payload.get("horizon", 0),
+                true_positives=payload.get("true_positives", []),
+                normalize=is_tpr,
+            )
+            if x_values.size == 0:
+                continue
+            ax.step(
+                x_values,
+                y_values,
+                where="post",
+                label=label,
+                color=color,
+                linestyle=linestyle,
+                linewidth=2.1,
+                alpha=0.88,
+            )
+            if np.any(y_values > 0):
+                max_x_useful = max(max_x_useful, float(x_values[np.where(y_values > 0)[0][-1]]))
+            max_y = max(max_y, float(np.nanmax(y_values)))
+            plotted = True
+
+        ax.set_title(f"{_display_algo_name(algo_key)} - Walmart grande initialisation")
+        ax.set_xlabel("Budget total (initialisation + tirages)")
+        ax.set_ylabel("TPR" if is_tpr else "Bras positifs detectes")
+        if is_tpr:
+            ax.set_ylim(-0.02, 1.05)
+        else:
+            ax.set_ylim(-0.05 * max_y, 1.08 * max_y)
+        ax.set_xlim(0, max(1.0, max_x_useful * 1.08))
+
+        y_bottom, y_top = ax.get_ylim()
+        for idx, (init_key, (init_cost, color, label)) in enumerate(sorted(
+            init_bands.items(),
+            key=lambda item: item[1][0],
+            reverse=True,
+        )):
+            if init_key == "classic":
+                band_label = f"init classique = {init_cost}"
+                text_label = "init classique"
+            else:
+                percent = init_key.split("_", 1)[1]
+                band_label = f"init {percent}% = {init_cost}"
+                text_label = f"init {percent}%"
+            _add_total_budget_initialization_band(
+                ax,
+                init_cost,
+                color,
+                label=band_label,
+            )
+            if init_cost > 0:
+                text_x = init_cost * 0.5
+                text_y = y_bottom + (y_top - y_bottom) * min(0.12 + 0.075 * idx, 0.42)
+                ax.text(
+                    text_x,
+                    text_y,
+                    f"{text_label}\n{init_cost}",
+                    ha="center",
+                    va="center",
+                    fontsize=7.5,
+                    color="#555555",
+                    bbox={
+                        "boxstyle": "round,pad=0.16",
+                        "facecolor": "white",
+                        "edgecolor": "none",
+                        "alpha": 0.72,
+                    },
+                    zorder=2,
+                )
+
+        ax.grid(True, alpha=0.25)
+        if not plotted:
+            ax.text(0.5, 0.5, "Cache classique ou grande init manquant",
+                    transform=ax.transAxes, ha="center", va="center", color="gray")
+
+    for ax in flat_axes[len(algo_keys):]:
+        ax.axis("off")
+
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="lower center", ncol=4,
+                   bbox_to_anchor=(0.5, 0.0), fontsize=9)
+    title = (
+        "Walmart - grille d'initialisation : courbes TPR"
+        if is_tpr
+        else "Walmart - grille d'initialisation : courbes de decouverte"
+    )
+    fig.suptitle(
+        title + "\nUniforme et adaptatif sont compares en budget experimental total.",
+        fontsize=14,
+        fontweight="bold",
+    )
+    plt.tight_layout(rect=(0, 0.07, 1, 0.92))
+    output_name = (
+        "walmart_big_init_tpr_curves.png"
+        if is_tpr
+        else "walmart_big_init_discovery_curves.png"
+    )
+    _savefig_with_permission_fallback(
+        output_dir / output_name,
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def _plot_walmart_big_init_same_set_heatmap(classic_payloads, large_payloads,
+                                            algo_keys, output_dir):
+    rows = []
+    modes = [("Uniforme", "unif"), ("Adaptatif", "adapt")]
+    for algo_idx, algo_key in enumerate(algo_keys):
+        classic_payload = classic_payloads.get(algo_key)
+        percent_payloads = large_payloads.get(algo_key, {})
+        if classic_payload is None or not percent_payloads:
+            continue
+        for percent_idx, percent in enumerate(WALMART_BIG_INIT_PERCENTS):
+            large_payload = percent_payloads.get(percent)
+            if large_payload is None:
+                continue
+            for mode_idx, (mode_label, suffix) in enumerate(modes):
+                classic_init_cost = _initialization_cost(
+                    classic_payload.get("init_nb", 0),
+                    classic_payload.get("n_arms", 0),
+                    classic_payload.get("init_choice", True),
+                )
+                large_init_cost = _initialization_cost(
+                    large_payload.get("init_nb", 0),
+                    large_payload.get("n_arms", 0),
+                    large_payload.get("init_choice", True),
+                )
+                method_specs = [
+                    (
+                        "classic",
+                        "Init classique",
+                        _shift_discovery_times(
+                            classic_payload.get(f"discovery_{suffix}", []) or [],
+                            classic_init_cost,
+                        ),
+                    ),
+                    (
+                        f"init_{percent}",
+                        f"Init {percent}%",
+                        _shift_discovery_times(
+                            large_payload.get(f"discovery_{suffix}", []) or [],
+                            large_init_cost,
+                        ),
+                    ),
+                ]
+                comparison_rows = _compare_same_set_discovery(
+                    method_specs,
+                    left_col="init_a",
+                    right_col="init_b",
+                )
+                row_label = f"{_display_algo_name(algo_key)} - {mode_label} - {percent}%"
+                for row in comparison_rows:
+                    row["algorithm"] = _display_algo_name(algo_key)
+                    row["mode"] = mode_label
+                    row["init_percent"] = percent
+                    row["row_label"] = row_label
+                    row["row_order"] = (
+                        algo_idx * len(WALMART_BIG_INIT_PERCENTS) * len(modes)
+                        + percent_idx * len(modes)
+                        + mode_idx
+                    )
+                    rows.append(row)
+
+    rows_df = pd.DataFrame(rows)
+    export_path = output_dir / "walmart_big_init_same_set_comparison.csv"
+    if rows_df.empty:
+        pd.DataFrame(columns=[
+            "algorithm", "mode", "init_percent", "simulation", "k", "common_set",
+            "time_a", "time_b", "delta_b_minus_a",
+        ]).to_csv(export_path, index=False)
+        return
+
+    rows_df[[
+        "algorithm", "mode", "init_percent", "simulation", "k", "common_set",
+        "time_a", "time_b", "delta_b_minus_a",
+    ]].to_csv(export_path, index=False)
+
+    grouped = (
+        rows_df.groupby(["row_order", "row_label", "k"], as_index=False)
+        .agg(mean_delta=("delta_b_minus_a", "mean"))
+        .sort_values(["row_order", "k"])
+    )
+    row_labels = (
+        grouped[["row_order", "row_label"]]
+        .drop_duplicates()
+        .sort_values("row_order")["row_label"]
+        .tolist()
+    )
+    k_values = sorted(int(k) for k in grouped["k"].unique())
+    matrix = np.full((len(row_labels), len(k_values)), np.nan, dtype=float)
+    row_idx = {label: idx for idx, label in enumerate(row_labels)}
+    k_idx = {k: idx for idx, k in enumerate(k_values)}
+    for row in grouped.itertuples(index=False):
+        matrix[row_idx[row.row_label], k_idx[int(row.k)]] = float(row.mean_delta)
+
+    max_abs = max(float(np.nanmax(np.abs(matrix))), 1.0)
+    cmap = plt.cm.RdBu_r.copy()
+    cmap.set_bad(color="white")
+    fig_width = max(12, 0.5 * len(k_values) + 5)
+    fig_height = max(5.5, 0.55 * len(row_labels) + 3.2)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    image = ax.imshow(np.ma.masked_invalid(matrix), aspect="auto",
+                      cmap=cmap, vmin=-max_abs, vmax=max_abs)
+    fontsize = 8 if len(k_values) <= 24 else 6
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            value = matrix[i, j]
+            if np.isnan(value):
+                ax.text(j, i, "NA", ha="center", va="center",
+                        fontsize=fontsize, color="#b0b0b0")
+            else:
+                ax.text(j, i, _format_delta_value(value), ha="center", va="center",
+                        fontsize=fontsize,
+                        color="white" if abs(value) > 0.55 * max_abs else "black")
+    ax.set_xticks(np.arange(len(k_values)))
+    ax.set_xticklabels(k_values)
+    ax.set_yticks(np.arange(len(row_labels)))
+    ax.set_yticklabels(row_labels)
+    ax.set_xlabel("Taille k du set decouvert")
+    ax.set_ylabel("Algorithme et mode")
+    ax.set_title(
+        "Walmart grande init vs init classique : temps de decouverte du meme set\n"
+        "Cellule = difference de temps en budget total (init testee - init classique)"
+    )
+    ax.set_xticks(np.arange(-0.5, len(k_values), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(row_labels), 1), minor=True)
+    ax.grid(which="minor", color="#d9d9d9", linewidth=0.6)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    cbar = fig.colorbar(image, ax=ax, shrink=0.88)
+    cbar.set_label("Init testee - init classique (budget total)")
+    plt.tight_layout()
+    _savefig_with_permission_fallback(
+        output_dir / "walmart_big_init_same_set_heatmap.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def generate_walmart_big_init_comparison(project_root, algo_keys):
+    algo_keys = [algo for algo in ["simple", "v2", "v3", "sr"] if algo in algo_keys]
+    output_dir = project_root / "figure_algo_compar" / "walmart_init_grand"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    classic_payloads, large_payloads = _collect_walmart_big_init_payloads(project_root, algo_keys)
+
+    rows = []
+    for algo_key in algo_keys:
+        percent_payloads = large_payloads.get(algo_key, {})
+        first_large_payload = next(iter(percent_payloads.values()), None)
+        min_arm_size = int(
+            (first_large_payload or {}).get("min_arm_size", 1)
+        )
+        classic_payload = classic_payloads.get(algo_key)
+        if classic_payload is not None:
+            classic_percent = (
+                100.0 * float(classic_payload.get("init_nb", 0)) / max(1, min_arm_size)
+            )
+            rows.extend(_payload_mode_summary_rows(
+                classic_payload,
+                algo_key,
+                "classic",
+                classic_percent,
+                min_arm_size,
+                [("Uniforme", "unif"), ("Adaptatif", "adapt")],
+            ))
+        for percent in WALMART_BIG_INIT_PERCENTS:
+            large_payload = percent_payloads.get(percent)
+            if large_payload is None:
+                continue
+            rows.extend(_payload_mode_summary_rows(
+                large_payload,
+                algo_key,
+                f"init_{percent}",
+                large_payload.get("init_percent", percent),
+                min_arm_size,
+                [("Uniforme", "unif"), ("Adaptatif", "adapt")],
+            ))
+
+    summary_path = output_dir / "walmart_big_init_summary.csv"
+    try:
+        pd.DataFrame(rows).to_csv(summary_path, index=False)
+    except PermissionError as exc:
+        print(f"[walmart-big-init] could not overwrite {summary_path}: {exc}")
+    _plot_walmart_big_init_curves(
+        classic_payloads,
+        large_payloads,
+        algo_keys,
+        output_dir,
+        y_kind="count",
+    )
+    _plot_walmart_big_init_curves(
+        classic_payloads,
+        large_payloads,
+        algo_keys,
+        output_dir,
+        y_kind="tpr",
+    )
+    _plot_walmart_big_init_same_set_heatmap(
+        classic_payloads,
+        large_payloads,
+        algo_keys,
+        output_dir,
+    )
+    print(f"[walmart-big-init] wrote comparison figures to {output_dir}")
+
+
 def _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors, output_dir):
     dataset_keys = _ordered_comparison_datasets(dataset_keys)
     algo_order = [algo for algo in ["simple", "v2", "v3", "sr"] if algo in algo_keys]
@@ -1329,7 +2228,7 @@ def _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors
             ax.text(
                 0.5,
                 0.5,
-                messages.get(dataset_key, "No common adaptive set."),
+                messages.get(dataset_key, "Aucun set adaptatif commun."),
                 transform=ax.transAxes,
                 ha="center",
                 va="center",
@@ -1337,7 +2236,7 @@ def _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors
                 fontsize=10,
                 wrap=True,
             )
-            ax.set_title(f"{dataset_key.upper()} - no shared adaptive set")
+            ax.set_title(f"{dataset_key.upper()} - aucun set adaptatif commun")
             continue
 
         values = [record["times"].get(algo, np.nan) for algo in algo_order]
@@ -1361,25 +2260,140 @@ def _plot_common_adaptive_set_times(cached, algo_keys, dataset_keys, algo_colors
         if len(common_tuple) > 10:
             set_preview += ", ..."
         ax.set_title(
-            f"{dataset_key.upper()} - largest common Adaptive set: k={record['k']}\n"
+            f"{dataset_key.upper()} - plus grand set adaptatif commun : k={record['k']}\n"
             f"set {{{set_preview}}}"
         )
         ax.set_xticks(x)
         ax.set_xticklabels(display_labels, rotation=0)
-        ax.set_ylabel("Discovery time for the same arm set")
+        ax.set_ylabel("Temps de decouverte du meme set de bras")
         ax.grid(axis="y", alpha=0.25)
 
     for ax in flat_axes[len(dataset_keys):]:
         ax.axis("off")
 
     fig.suptitle(
-        "Discovery time for the largest identical Adaptive-discovered set\n"
-        "Each panel compares JJ, V2, V3, and SR only at the largest k where all four found the exact same set.",
+        "Temps de decouverte du plus grand set identique trouve en adaptatif\n"
+        "Chaque panneau compare JJ, V2, V3 et SR au plus grand k ou les quatre trouvent exactement le meme set.",
         fontsize=14,
         fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.02, 1, 0.92))
-    plt.savefig(output_dir / "common_adaptive_set_discovery_times.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_dir / "common_adaptive_set_discovery_times.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def _plot_adapt_vs_uniform_gap_heatmap(cached, algo_keys, dataset_keys, output_dir):
+    dataset_keys = _ordered_comparison_datasets(dataset_keys)
+    algo_order = [algo for algo in ["simple", "v2", "v3", "sr"] if algo in algo_keys]
+    if not algo_order or not dataset_keys:
+        return
+
+    rows = []
+    matrix = np.full((len(dataset_keys), len(algo_order)), np.nan, dtype=float)
+    k_matrix = np.full((len(dataset_keys), len(algo_order)), np.nan, dtype=float)
+
+    for i, dataset_key in enumerate(dataset_keys):
+        for j, algo_key in enumerate(algo_order):
+            payload = cached.get((algo_key, dataset_key))
+            if not payload:
+                continue
+            record = _largest_common_pair_discovery_record(
+                payload.get("discovery_unif", []) or [],
+                payload.get("discovery_adapt", []) or [],
+                "uniform",
+                "adaptive",
+                dataset_key,
+                "Classique : adaptatif vs uniforme",
+            )
+            if record is None:
+                rows.append({
+                    "dataset": dataset_key,
+                    "algorithm": _display_algo_name(algo_key),
+                    "k": np.nan,
+                    "common_set": "",
+                    "uniform_time": np.nan,
+                    "adaptive_time": np.nan,
+                    "delta_adaptive_minus_uniform": np.nan,
+                })
+                continue
+
+            delta = float(record["uniform_time"] - record["adaptive_time"])
+            matrix[i, j] = delta
+            k_matrix[i, j] = int(record["k"])
+            rows.append({
+                "dataset": dataset_key,
+                "algorithm": _display_algo_name(algo_key),
+                "simulation": record["simulation"],
+                "k": int(record["k"]),
+                "common_set": record["common_set"],
+                "uniform_time": record["uniform_time"],
+                "adaptive_time": record["adaptive_time"],
+                "delta_uniform_minus_adaptive": delta,
+            })
+
+    pd.DataFrame(rows).to_csv(
+        output_dir / "adapt_vs_uniform_gap_heatmap.csv",
+        index=False,
+    )
+
+    if not np.isfinite(matrix).any():
+        return
+
+    max_abs = max(float(np.nanmax(np.abs(matrix))), 1.0)
+    cmap = plt.cm.RdBu_r.copy()
+    cmap.set_bad(color="white")
+    fig_width = max(8.0, 1.45 * len(algo_order) + 4.5)
+    fig_height = max(4.8, 0.9 * len(dataset_keys) + 2.8)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    image = ax.imshow(
+        np.ma.masked_invalid(matrix),
+        cmap=cmap,
+        vmin=-max_abs,
+        vmax=max_abs,
+        aspect="auto",
+    )
+
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            value = matrix[i, j]
+            if not np.isfinite(value):
+                ax.text(j, i, "NA", ha="center", va="center",
+                        fontsize=9, color="#9e9e9e")
+                continue
+            text_color = "white" if abs(value) > 0.55 * max_abs else "black"
+            ax.text(
+                j,
+                i,
+                f"{_format_delta_value(value)}\nk={int(k_matrix[i, j])}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                color=text_color,
+            )
+
+    ax.set_xticks(np.arange(len(algo_order)))
+    ax.set_xticklabels([_display_algo_name(algo) for algo in algo_order])
+    ax.set_yticks(np.arange(len(dataset_keys)))
+    ax.set_yticklabels([dataset.upper() for dataset in dataset_keys])
+    ax.set_xlabel("Algorithme")
+    ax.set_ylabel("Jeu de donnees")
+    ax.set_title(
+        "Gain de temps uniforme - adaptatif sur le plus grand meme set decouvert\n"
+        "Chaque cellule indique l'ecart de temps et la taille k du set commun"
+    )
+    ax.set_xticks(np.arange(-0.5, len(algo_order), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(dataset_keys), 1), minor=True)
+    ax.grid(which="minor", color="#d0d0d0", linewidth=0.8)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    cbar = fig.colorbar(image, ax=ax, shrink=0.88)
+    cbar.set_label("Temps uniforme - temps adaptatif")
+    plt.tight_layout()
+    _savefig_with_permission_fallback(
+        output_dir / "adapt_vs_uniform_gap_heatmap.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
     plt.close()
 
 
@@ -1443,7 +2457,7 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
     for dataset_key in dataset_keys:
         payload = cached.get(dataset_key)
         if not payload:
-            records[dataset_key] = {"message": messages.get(dataset_key, "Missing cache.")}
+            records[dataset_key] = {"message": messages.get(dataset_key, "Cache manquant.")}
             continue
 
         classic_record = _largest_common_pair_discovery_record(
@@ -1452,22 +2466,13 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
             "uniform",
             "adaptive",
             dataset_key,
-            "Classic: Adaptive vs Uniform",
-        )
-        var_record = _largest_common_pair_discovery_record(
-            payload.get("discovery_unif_v", []) or [],
-            payload.get("discovery_adapt_v", []) or [],
-            "uniform",
-            "adaptive",
-            dataset_key,
-            "Online control: Adaptive Var vs Uniform Var",
+            "Classique : adaptatif vs uniforme",
         )
         records[dataset_key] = {
             "Classic": classic_record,
-            "Var": var_record,
             "message": None,
         }
-        for record in [classic_record, var_record]:
+        for record in [classic_record]:
             if record is None:
                 continue
             rows.append({
@@ -1491,10 +2496,8 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
     fig, axes = plt.subplots(nrows, ncols, figsize=(8.2 * ncols, 5.4 * nrows), squeeze=False)
     flat_axes = axes.ravel()
     mode_colors = {
-        "Uniform": "#9E9E9E",
-        "Adaptive": "#2E7D32",
-        "Uniform Var": "#B0B0B0",
-        "Adaptive Var": "#43A047",
+        "Uniforme": "#9E9E9E",
+        "Adaptatif": "#2E7D32",
     }
 
     for ax, dataset_key in zip(flat_axes, dataset_keys):
@@ -1504,12 +2507,11 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
             ax.text(0.5, 0.5, record_bundle["message"],
                     transform=ax.transAxes, ha="center", va="center",
                     color="gray", wrap=True)
-            ax.set_title(f"{dataset_key.upper()} - missing data")
+            ax.set_title(f"{dataset_key.upper()} - donnees manquantes")
             continue
 
         specs = [
-            ("Classic", "Uniform", "Adaptive"),
-            ("Var", "Uniform Var", "Adaptive Var"),
+            ("Classic", "Uniforme", "Adaptatif"),
         ]
         x_positions = []
         values = []
@@ -1520,7 +2522,7 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
 
         for group_idx, (record_key, uniform_label, adaptive_label) in enumerate(specs):
             record = record_bundle.get(record_key)
-            center = group_idx * 3.0
+            center = group_idx * 2.0
             group_centers.append(center + 0.4)
             if record is None:
                 x_positions.extend([center, center + 0.8])
@@ -1546,9 +2548,9 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
         finite_values = [value for value in values if np.isfinite(value)]
         if not finite_values:
             ax.axis("off")
-            ax.text(0.5, 0.5, "No identical discovered set between compared modes",
+            ax.text(0.5, 0.5, "Aucun set identique entre les modes compares",
                     transform=ax.transAxes, ha="center", va="center", color="gray", wrap=True)
-            ax.set_title(f"{dataset_key.upper()} - no common sets")
+            ax.set_title(f"{dataset_key.upper()} - aucun set commun")
             continue
 
         bars = ax.bar(x_positions, np.nan_to_num(values, nan=0.0), color=colors,
@@ -1564,28 +2566,26 @@ def generate_local_figure10_same_set_adapt_vs_uniform(output_root, dataset_keys=
             ax.text(bar.get_x() + bar.get_width() / 2, -0.12 * y_max,
                     annotation, ha="center", va="top", fontsize=7, wrap=True)
 
-        ax.set_title(f"{dataset_key.upper()} - largest identical set per comparison")
+        ax.set_title(f"{dataset_key.upper()} - plus grand set identique par comparaison")
         ax.set_xticks(x_positions)
         ax.set_xticklabels(labels, rotation=25, ha="right")
-        ax.set_ylabel("Discovery time for the same arm set")
+        ax.set_ylabel("Temps de decouverte du meme set")
         ax.set_ylim(-0.28 * y_max, 1.18 * y_max)
         ax.grid(axis="y", alpha=0.25)
-        for center in group_centers[:-1]:
-            ax.axvline(center + 1.1, color="#d0d0d0", linewidth=0.8)
 
     for ax in flat_axes[len(dataset_keys):]:
         ax.axis("off")
 
     fig.suptitle(
-        "Figure 10 - Adaptive vs Uniform discovery time on the largest identical discovered set\n"
-        "Each dataset compares the classic pair and the online-control pair separately; lower bars are faster.",
+        "Figure 10 - Temps de decouverte adaptatif vs uniforme sur le plus grand set identique\n"
+        "Seul le cas classique est affiche ; les barres basses sont plus rapides.",
         fontsize=14,
         fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0.03, 1, 0.91))
     figure_path = output_root / "figure10_same_set_adapt_vs_uniform.png"
-    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
-    plt.savefig(output_root / "figure10.png", dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(figure_path, dpi=300, bbox_inches="tight")
+    _savefig_with_permission_fallback(output_root / "figure10.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -1643,7 +2643,7 @@ def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, ou
                 break
         figure_mode_specs = [
             spec for spec in MODE_SPECS
-            if spec[1] in {"Adaptive", "Adaptive Var"}
+            if spec[1] in {"Adaptatif", "Adaptatif controle online"}
         ]
 
         for _, mode_label, _, _, discovery_key, _ in figure_mode_specs:
@@ -1684,7 +2684,7 @@ def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, ou
             _draw_discovery_sequence_table(
                 table_ax,
                 method_specs,
-                title=f"{mode_label}: discovery order by algorithm",
+                title=f"{mode_label} : ordre de decouverte par algorithme",
                 control_arm=control_arm_for_dataset,
                 displayed_ranks=prepared["k_values"] if prepared is not None else None,
             )
@@ -1701,15 +2701,15 @@ def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, ou
         if last_image is not None:
             cbar_ax = fig.add_axes([0.91, 0.18, 0.015, 0.56])
             cbar = fig.colorbar(last_image, cax=cbar_ax)
-            cbar.set_label("Mean time difference: algorithm B - algorithm A")
+            cbar.set_label("Difference de temps moyenne : algorithme B - algorithme A")
 
         fig.suptitle(
-            f"{dataset_key.upper()} - same discovered-set timing across algorithms\n"
-            "A filled cell means both algorithms found the exact same set at size k; negative means algorithm B was faster.",
+            f"{dataset_key.upper()} - temps de decouverte des memes sets entre algorithmes\n"
+            "Une cellule remplie signifie que les deux algorithmes ont trouve le meme set a la taille k ; negatif signifie que B est plus rapide.",
             fontsize=14,
             fontweight="bold",
         )
-        plt.savefig(
+        _savefig_with_permission_fallback(
             output_dir / f"same_set_discovery_heatmap_{dataset_key}.png",
             dpi=300,
             bbox_inches="tight",
@@ -1717,17 +2717,181 @@ def _plot_global_same_set_discovery_heatmaps(cached, algo_keys, dataset_keys, ou
         plt.close()
 
 
+if __name__ == "__main__" and ONLY_KENDALL_HEATMAPS:
+    git_root = find_project_root()
+    comparison_dataset_keys = _comparison_dataset_scope()
+    comparison_algo_keys = [algo for algo in ["simple", "v2", "v3", "sr"] if algo in RUN_ALGOS]
+    if len(comparison_algo_keys) < 4:
+        comparison_algo_keys = ["simple", "v2", "v3", "sr"]
+    cached = _collect_cached_results(
+        git_root,
+        comparison_algo_keys,
+        comparison_dataset_keys,
+    )
+    output_dir = git_root / "figure_algo_compar"
+    _plot_adaptive_order_kendall_heatmaps(
+        cached,
+        comparison_algo_keys,
+        comparison_dataset_keys,
+        output_dir,
+    )
+    print(f"[comparison] wrote Kendall adaptive-order heatmaps to {output_dir}")
+    sys.exit(0)
+
+
+if __name__ == "__main__" and ONLY_REPLOT and len(RUN_ALGOS) > 1:
+    script_path = os.path.abspath(__file__)
+    print(
+        f"Replot sequentiel depuis cache pour {len(RUN_ALGOS)} algorithme(s). "
+        "Aucune experience ne sera relancee."
+    )
+    for algo_key in RUN_ALGOS:
+        env = os.environ.copy()
+        env["REAL_DATA_ALGO"] = algo_key
+        env["REAL_DATA_CHILD_RUN"] = "1"
+        env["REAL_DATA_ONLY_REPLOT"] = "1"
+        env["REAL_DATA_USE_CACHE"] = "1"
+        env["REAL_DATA_SAVE_CACHE"] = "0"
+        env["REAL_DATA_ONLY_COMPARISON"] = "0"
+        env["REAL_DATA_COMPARE_ALGOS"] = "0"
+        env["REAL_DATA_PARALLEL_ALGOS"] = "0"
+        env["REAL_DATA_PARALLEL_MODES"] = "0"
+        env["REAL_DATA_WALMART_BIG_INIT"] = "0"
+        env.pop("REAL_DATA_ALGOS", None)
+        print(f"\n================ REPLOT CACHE WITH {algo_key.upper()} ================\n")
+        subprocess.run(
+            [sys.executable, script_path],
+            cwd=os.path.dirname(script_path),
+            env=env,
+            check=True,
+        )
+
+    if GENERATE_ALGO_COMPARISON:
+        generate_algorithm_comparison_figures(
+            find_project_root(),
+            RUN_ALGOS,
+            RUN_DATASETS,
+        )
+    sys.exit(0)
+
+
+if __name__ == "__main__" and WALMART_BIG_INIT_SPECIAL and len(RUN_ALGOS) > 1:
+    script_path = os.path.abspath(__file__)
+    child_envs = []
+    for algo_key in RUN_ALGOS:
+        env = os.environ.copy()
+        env["REAL_DATA_ALGO"] = algo_key
+        env["REAL_DATA_CHILD_RUN"] = "1"
+        env["REAL_DATA_WALMART_BIG_INIT"] = "1"
+        env["REAL_DATA_DATASET"] = "walmart"
+        env["REAL_DATA_DATASETS"] = "walmart"
+        env["REAL_DATA_COMPARE_ALGOS"] = "0"
+        env.pop("REAL_DATA_ALGOS", None)
+        child_envs.append((algo_key, env))
+
+    if PARALLEL_ALGO_RUNS:
+        max_workers = min(ALGO_WORKERS, len(child_envs))
+        print(
+            f"Running Walmart large-init special for {len(child_envs)} algorithm(s) "
+            f"with {max_workers} worker(s)."
+        )
+        running = []
+        failed = None
+        for algo_key, env in child_envs:
+            print(f"\n================ START WALMART BIG INIT WITH {algo_key.upper()} ================\n")
+            proc = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+            )
+            running.append((algo_key, proc))
+            while len([item for item in running if item[1].poll() is None]) >= max_workers:
+                for finished_algo, finished_proc in list(running):
+                    return_code = finished_proc.poll()
+                    if return_code is None:
+                        continue
+                    if return_code != 0:
+                        failed = (finished_algo, return_code)
+                    running.remove((finished_algo, finished_proc))
+                if failed is not None:
+                    break
+                time.sleep(0.5)
+            if failed is not None:
+                break
+
+        for algo_key, proc in list(running):
+            return_code = proc.wait()
+            if return_code != 0 and failed is None:
+                failed = (algo_key, return_code)
+        if failed is not None:
+            raise subprocess.CalledProcessError(failed[1], f"walmart big init ({failed[0]})")
+    else:
+        for algo_key, env in child_envs:
+            print(f"\n================ RUN WALMART BIG INIT WITH {algo_key.upper()} ================\n")
+            subprocess.run(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+                check=True,
+            )
+
+    generate_walmart_big_init_comparison(find_project_root(), RUN_ALGOS)
+    sys.exit(0)
+
+
 if __name__ == "__main__" and len(RUN_ALGOS) > 1:
     script_path = os.path.abspath(__file__)
+    child_envs = []
     for algo_key in RUN_ALGOS:
-        print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
         env = os.environ.copy()
         env["REAL_DATA_ALGO"] = algo_key
         env["REAL_DATA_CHILD_RUN"] = "1"
         env["REAL_DATA_COMPARE_ALGOS"] = "0"
         env.pop("REAL_DATA_ALGOS", None)
-        subprocess.run([sys.executable, script_path], cwd=os.path.dirname(script_path),
-                       env=env, check=True)
+        child_envs.append((algo_key, env))
+
+    if PARALLEL_ALGO_RUNS:
+        max_workers = min(ALGO_WORKERS, len(child_envs))
+        print(f"Running {len(child_envs)} algorithm(s) in parallel with {max_workers} worker(s).")
+        running = []
+        failed = None
+        for algo_key, env in child_envs:
+            print(f"\n================ START REAL DATA WITH {algo_key.upper()} ================\n")
+            proc = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+            )
+            running.append((algo_key, proc))
+            while len([item for item in running if item[1].poll() is None]) >= max_workers:
+                for finished_algo, finished_proc in list(running):
+                    return_code = finished_proc.poll()
+                    if return_code is None:
+                        continue
+                    if return_code != 0:
+                        failed = (finished_algo, return_code)
+                    running.remove((finished_algo, finished_proc))
+                if failed is not None:
+                    break
+                time.sleep(0.5)
+            if failed is not None:
+                break
+
+        for algo_key, proc in list(running):
+            return_code = proc.wait()
+            if return_code != 0 and failed is None:
+                failed = (algo_key, return_code)
+        if failed is not None:
+            raise subprocess.CalledProcessError(failed[1], f"real_data_processing.py ({failed[0]})")
+    else:
+        for algo_key, env in child_envs:
+            print(f"\n================ RUN REAL DATA WITH {algo_key.upper()} ================\n")
+            subprocess.run(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+                check=True,
+            )
     if GENERATE_ALGO_COMPARISON:
         generate_algorithm_comparison_figures(
             find_project_root(),
@@ -1997,6 +3161,223 @@ if __name__ == "__main__":
     # name_data="walmart"
     # name_data="exercise"
     
+    if WALMART_BIG_INIT_SPECIAL:
+        name_data = "walmart"
+        walmart_special_root = output_root / "walmart_init_grand"
+        walmart_special_root.mkdir(parents=True, exist_ok=True)
+        data_test = results[name_data]["data"]
+        arm_test = results[name_data]["arm_names"]
+        control_arm = results[name_data]["control_arm"]
+        min_len, max_len = get_min_max_samples(data_test)
+        init_choice = True
+        n_arms = len(arm_test)
+        horizon = sum(len(arm) for arm in data_test[0])
+        mu_0_unif = mean(data_test[0][control_arm])
+        delta = 0.05
+        is_true_mean = False
+        classic_stats_path = output_root / "walmart" / "classic_stats.txt"
+        classic_cache_path = output_root / "walmart" / CACHE_FILENAME
+        true_positives = []
+        if classic_stats_path.exists():
+            true_positives = _load_classic_positive_list(classic_stats_path)
+        else:
+            classic_payload = _load_cache_or_none(classic_cache_path)
+            if classic_payload is not None:
+                true_positives = list(map(int, classic_payload.get("true_positives", [])))
+
+        print("\n=== Special Walmart large-init experiment ===")
+        print(f"Algorithm: {_display_algo_name(RUN_ALGO)}")
+        print(f"Output directory: {walmart_special_root}")
+        print(f"Walmart min arm size: {min_len} | max arm size: {max_len}")
+        print(f"Init grid: {', '.join(str(p) + '%' for p in WALMART_BIG_INIT_PERCENTS)}")
+        print("Modes: Uniform and Adaptive only (classic/simple, no controle online)\n")
+
+        def _run_walmart_special_percent(percent):
+            percent = max(0, min(100, int(percent)))
+            init_nb = int(round(min_len * percent / 100.0))
+            dataset_output_dir = walmart_special_root / f"init_{percent}"
+            dataset_output_dir.mkdir(parents=True, exist_ok=True)
+            special_cache_path = dataset_output_dir / CACHE_FILENAME
+            legacy_cache_path = walmart_special_root / CACHE_FILENAME
+
+            print(f"\n--- Walmart init {percent}% -> init_nb={init_nb} ---")
+            special_payload = None
+            cached = _load_cache_or_none(special_cache_path)
+            if cached is None and legacy_cache_path.exists():
+                legacy_payload = _load_cache_or_none(legacy_cache_path)
+                if legacy_payload is not None and int(legacy_payload.get("init_percent", -1)) == percent:
+                    cached = legacy_payload
+                    print(f"Loaded legacy Walmart large-init cache from {legacy_cache_path}")
+            if cached is not None:
+                cache_checks = {
+                    "special_run": "walmart_big_init",
+                    "algorithm": RUN_ALGO,
+                    "dataset": "walmart",
+                    "modes": ["uniform", "adaptive"],
+                    "init_percent": percent,
+                    "init_nb": init_nb,
+                    "min_arm_size": min_len,
+                    "horizon": horizon,
+                    "n_arms": n_arms,
+                    "control_arm": control_arm,
+                }
+                mismatches = [
+                    key for key, expected in cache_checks.items()
+                    if cached.get(key) != expected
+                ]
+                if mismatches:
+                    print(
+                        f"Walmart init {percent}% cache mismatch on {mismatches}; "
+                        "re-running special experiment."
+                    )
+                else:
+                    special_payload = cached
+                    print(f"Loaded Walmart init {percent}% cache from {special_cache_path}")
+
+            if special_payload is None:
+                runner_module = adaptative_algorithm_binary
+
+                def _run_special_mode(mode_name):
+                    return runner_module.run_experiment(
+                        arm_test,
+                        mu_0_unif,
+                        delta,
+                        horizon,
+                        mode_name,
+                        data_test,
+                        n_sims,
+                        control_arm,
+                        init_nb,
+                        init_choice,
+                        False,
+                        is_true_mean,
+                        return_discovery_times=True,
+                        return_bootstrap_times=True,
+                        history_record_every=HISTORY_RECORD_EVERY,
+                        deterministic_bootstrap_key="walmart",
+                    )
+
+                special_jobs = {
+                    "unif": "uniform",
+                    "adapt": "adaptive",
+                }
+                special_results = {}
+                if PARALLEL_MODE_RUNS and len(special_jobs) > 1:
+                    max_workers = min(MODE_WORKERS, len(special_jobs))
+                    print(
+                        f"Running {len(special_jobs)} Walmart init {percent}% mode(s) "
+                        f"in parallel with {max_workers} worker(s)."
+                    )
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = {
+                            executor.submit(_run_special_mode, mode_name): key
+                            for key, mode_name in special_jobs.items()
+                        }
+                        for future in as_completed(futures):
+                            special_results[futures[future]] = future.result()
+                else:
+                    for key, mode_name in special_jobs.items():
+                        special_results[key] = _run_special_mode(mode_name)
+
+                (
+                    pnb_unif,
+                    pnb_unif_list,
+                    counts_unif_mean,
+                    counts_unif_list,
+                    np_p_value_list_unif,
+                    np_p_value_mean_unif,
+                    l_pos_unif,
+                    discovery_unif,
+                    bootstrap_unif,
+                ) = special_results["unif"]
+                (
+                    pnb_adapt,
+                    pnb_adapt_list,
+                    counts_adapt_mean,
+                    counts_adapt_list,
+                    np_p_value_list_adapt,
+                    np_p_value_mean_adapt,
+                    l_pos_adapt,
+                    discovery_adapt,
+                    bootstrap_adapt,
+                ) = special_results["adapt"]
+
+                special_payload = {
+                    "cache_version": CACHE_VERSION,
+                    "special_run": "walmart_big_init",
+                    "algorithm": RUN_ALGO,
+                    "dataset": "walmart",
+                    "modes": ["uniform", "adaptive"],
+                    "type_de_loi": "bernouilli",
+                    "control_arm": control_arm,
+                    "n_arms": n_arms,
+                    "horizon": horizon,
+                    "init_percent": percent,
+                    "init_nb": init_nb,
+                    "min_arm_size": min_len,
+                    "max_arm_size": max_len,
+                    "init_choice": init_choice,
+                    "history_record_every": HISTORY_RECORD_EVERY,
+                    "mu_0_unif": mu_0_unif,
+                    "true_positives": list(map(int, true_positives)),
+                    "arm_names": list(arm_test),
+                    "classic_cache_reference": str(classic_cache_path),
+                    "deterministic_bootstrap_key": "walmart",
+                    "n_sims": n_sims,
+                    "pnb_unif": pnb_unif,
+                    "pnb_unif_list": pnb_unif_list,
+                    "counts_unif_mean": counts_unif_mean,
+                    "counts_unif_list": counts_unif_list,
+                    "np_p_value_list_unif": np_p_value_list_unif,
+                    "np_p_value_mean_unif": np_p_value_mean_unif,
+                    "l_pos_unif": l_pos_unif,
+                    "discovery_unif": discovery_unif,
+                    "bootstrap_unif": bootstrap_unif,
+                    "pnb_adapt": pnb_adapt,
+                    "pnb_adapt_list": pnb_adapt_list,
+                    "counts_adapt_mean": counts_adapt_mean,
+                    "counts_adapt_list": counts_adapt_list,
+                    "np_p_value_list_adapt": np_p_value_list_adapt,
+                    "np_p_value_mean_adapt": np_p_value_mean_adapt,
+                    "l_pos_adapt": l_pos_adapt,
+                    "discovery_adapt": discovery_adapt,
+                    "bootstrap_adapt": bootstrap_adapt,
+                }
+                save_experiment_cache(special_cache_path, special_payload)
+                print(f"Saved Walmart init {percent}% cache to {special_cache_path}")
+
+            with open(dataset_output_dir / "resultats.txt", "w", encoding="utf-8") as f:
+                f.write("Special Walmart large-init results\n\n")
+                f.write(f"algorithm = {_display_algo_name(RUN_ALGO)}\n")
+                f.write(f"init_percent = {percent}\n")
+                f.write(f"init_nb = {init_nb}\n\n")
+                for label, pos_key in [("UNIF", "l_pos_unif"), ("ADAPT", "l_pos_adapt")]:
+                    f.write(f"   {label}\n")
+                    for i, element in enumerate(special_payload.get(pos_key, []), 1):
+                        f.write(f"{i}. {element}\n")
+
+            with open(dataset_output_dir / "discovery_times.txt", "w", encoding="utf-8") as f:
+                f.write("Special Walmart large-init discovery times\n\n")
+                for mode_name, discovery_key in [
+                    ("UNIF", "discovery_unif"),
+                    ("ADAPT", "discovery_adapt"),
+                ]:
+                    f.write(f"=== {mode_name} ===\n")
+                    for sim_idx, discovery_dict in enumerate(special_payload.get(discovery_key, []), 1):
+                        f.write(f"Simulation {sim_idx}\n")
+                        for arm_idx, first_time in sorted(
+                            (discovery_dict or {}).items(),
+                            key=lambda item: (float(item[1]), int(item[0])),
+                        ):
+                            f.write(f"arm {int(arm_idx)}: {int(first_time)}\n")
+                        f.write("\n")
+
+        for percent in WALMART_BIG_INIT_PERCENTS:
+            _run_walmart_special_percent(percent)
+
+        generate_walmart_big_init_comparison(git_root, [RUN_ALGO])
+        sys.exit(0)
+
     list_name=list(RUN_DATASETS)
     local_algo_payloads = {}
     num_graph=0
@@ -2166,7 +3547,7 @@ if __name__ == "__main__":
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
-            plt.savefig(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
+            _savefig_with_permission_fallback(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
             plt.close()
         elif run_classic_analysis and type_de_loi == "bernouilli":
             # ==========================================
@@ -2285,7 +3666,7 @@ if __name__ == "__main__":
                     transform=ax.transAxes, fontsize=7, ha='right', style='italic', color='gray')
 
             plt.tight_layout()
-            plt.savefig(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
+            _savefig_with_permission_fallback(dataset_output_dir / "figure0.png", dpi=300, bbox_inches="tight")
             plt.close()
         elif run_classic_analysis:
             print("Erreur : La variable 'type_de_loi' doit être strictement égale à 'normal' ou 'bernouilli'.")            
@@ -2322,26 +3703,38 @@ if __name__ == "__main__":
         cached_payload = None
         adaptive_classic_probe_results = None
         uniform_classic_probe_results = None
+        adaptive_classic_probe_horizon = None
+        uniform_classic_probe_horizon = None
 
         if USE_EXPERIMENT_CACHE and experiment_cache_path.exists():
             try:
                 cached_payload = load_experiment_cache(experiment_cache_path)
+                normalized_probe_modes = _normalize_stopping_probe_cache_payload(
+                    cached_payload,
+                    HISTORY_RECORD_EVERY,
+                )
+                if normalized_probe_modes:
+                    print(
+                        "Normalized cached stopping-probe curve(s) to final horizon: "
+                        f"{', '.join(normalized_probe_modes)}."
+                    )
                 cache_checks = {
                     "algorithm": RUN_ALGO,
                     "dataset": name_data,
                     "type_de_loi": type_de_loi,
                     "control_arm": control_arm,
                     "n_arms": n_arms,
-                    "requested_horizon": requested_horizon,
-                    "stop_rule": STOP_RULE,
                 }
+                if not (ONLY_COMPARISON_PLOTS or CACHE_READ_ONLY_MODE):
+                    cache_checks["requested_horizon"] = requested_horizon
+                    cache_checks["stop_rule"] = STOP_RULE
                 if name_data == "effort" and "effort_bootstrap_short_init_arms" in cached_payload:
                     cache_checks["effort_bootstrap_short_init_arms"] = EFFORT_BOOTSTRAP_SHORT_INIT_ARMS
                 if name_data == "effort" and "effort_init_bootstrap_seed" in cached_payload:
                     cache_checks["effort_init_bootstrap_seed"] = EFFORT_INIT_BOOTSTRAP_SEED
                 if "deterministic_bootstrap_key" in cached_payload:
                     cache_checks["deterministic_bootstrap_key"] = name_data
-                if STOP_RULE == "horizon":
+                if STOP_RULE == "horizon" and not (ONLY_COMPARISON_PLOTS or CACHE_READ_ONLY_MODE):
                     cache_checks["horizon"] = horizon
                 mismatches = [
                     key for key, expected in cache_checks.items()
@@ -2358,8 +3751,17 @@ if __name__ == "__main__":
                     effective_horizon = horizon
                     print(f"Loaded cached run_experiment variables from {experiment_cache_path}")
             except Exception as exc:
+                if ONLY_COMPARISON_PLOTS or CACHE_READ_ONLY_MODE:
+                    raise RuntimeError(
+                        f"Cache read-only mode requires a readable cache at {experiment_cache_path}: {exc}"
+                    ) from exc
                 print(f"Could not load cache {experiment_cache_path}: {exc}. Re-running experiments.")
                 cached_payload = None
+        elif ONLY_COMPARISON_PLOTS or CACHE_READ_ONLY_MODE:
+            raise FileNotFoundError(
+                f"Cache read-only mode requires cache {experiment_cache_path}. "
+                "Enable cache saving/regenerate the cache first, or disable read-only cache mode."
+            )
 
         adaptive_stop_target_arms = [
             int(arm_idx) for arm_idx in range(n_arms)
@@ -2376,6 +3778,7 @@ if __name__ == "__main__":
                 if type_de_loi == "normal"
                 else adaptative_algorithm_binary
             )
+            adaptive_classic_probe_horizon = adaptive_stop_cap
             adaptive_classic_probe_results = runner_module.run_experiment(
                 arm_test,
                 mu_0_unif,
@@ -2418,49 +3821,56 @@ if __name__ == "__main__":
         if STOP_RULE == "uniform_classic_all_non_control_arms" and cached_payload is None:
             print(
                 "Stopping rule: uniform classic must find every non-control arm as positive "
-                f"(cap={adaptive_stop_cap})."
+                f"(starting horizon={adaptive_stop_cap}; no fallback cap)."
             )
             runner_module = (
                 adaptative_algorithm_continuous
                 if type_de_loi == "normal"
                 else adaptative_algorithm_binary
             )
-            uniform_classic_probe_results = runner_module.run_experiment(
-                arm_test,
-                mu_0_unif,
-                delta,
-                adaptive_stop_cap,
-                'uniform',
-                data_test,
-                n_sims,
-                control_arm,
-                init_nb,
-                init_choice,
-                False,
-                is_true_mean,
-                return_discovery_times=True,
-                return_bootstrap_times=True,
-                history_record_every=HISTORY_RECORD_EVERY,
-                deterministic_bootstrap_key=name_data,
-                stop_when_all_non_control_found=True,
-                stop_control_arm=control_arm,
-            )
-            probe_discovery_unif = uniform_classic_probe_results[7]
-            stop_time, reached_all = _adaptive_classic_stop_time(
-                probe_discovery_unif,
-                adaptive_stop_target_arms,
-            )
-            if reached_all:
-                effective_horizon = max(1, int(stop_time))
+            uniform_probe_horizon = adaptive_stop_cap
+            while True:
                 print(
-                    "Uniform classic found every non-control arm as positive at "
-                    f"t={effective_horizon}; using this as common horizon."
+                    "Running uniform classic stopping probe until every non-control arm is found "
+                    f"(current horizon={uniform_probe_horizon})."
                 )
-            else:
-                effective_horizon = adaptive_stop_cap
+                uniform_classic_probe_horizon = uniform_probe_horizon
+                uniform_classic_probe_results = runner_module.run_experiment(
+                    arm_test,
+                    mu_0_unif,
+                    delta,
+                    uniform_probe_horizon,
+                    'uniform',
+                    data_test,
+                    n_sims,
+                    control_arm,
+                    init_nb,
+                    init_choice,
+                    False,
+                    is_true_mean,
+                    return_discovery_times=True,
+                    return_bootstrap_times=True,
+                    history_record_every=HISTORY_RECORD_EVERY,
+                    deterministic_bootstrap_key=name_data,
+                    stop_when_all_non_control_found=True,
+                    stop_control_arm=control_arm,
+                )
+                probe_discovery_unif = uniform_classic_probe_results[7]
+                stop_time, reached_all = _adaptive_classic_stop_time(
+                    probe_discovery_unif,
+                    adaptive_stop_target_arms,
+                )
+                if reached_all:
+                    effective_horizon = max(1, int(stop_time))
+                    print(
+                        "Uniform classic found every non-control arm as positive at "
+                        f"t={effective_horizon}; using this as common horizon."
+                    )
+                    break
+                uniform_probe_horizon *= 5
                 print(
-                    "Uniform classic did not find every non-control arm as positive before "
-                    f"the cap; using cap horizon={effective_horizon}."
+                    "Uniform classic has not found every non-control arm yet; "
+                    f"increasing probe horizon to {uniform_probe_horizon}."
                 )
             horizon = effective_horizon
 
@@ -2511,28 +3921,116 @@ if __name__ == "__main__":
             local_algo_payloads[name_data] = cached_payload
         else:
             # 1. Run Simulations
-            if type_de_loi=="normal":
-                if uniform_classic_probe_results is not None:
-                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list, np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = _probe_results_as_run_results(uniform_classic_probe_results)
-                else:
-                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                if adaptive_classic_probe_results is not None:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _probe_results_as_run_results(adaptive_classic_probe_results)
-                else:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_continuous.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-            elif type_de_loi=="bernouilli":
-                if uniform_classic_probe_results is not None:
-                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list, np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = _probe_results_as_run_results(uniform_classic_probe_results)
-                else:
-                    pnb_unif, pnb_unif_list, counts_unif_mean, counts_unif_list,  np_p_value_list_unif, np_p_value_mean_unif, l_pos_unif, discovery_unif, bootstrap_unif = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                pnb_unif_v, pnb_unif_v_list, counts_unif_v_mean, counts_unif_v_list, np_p_value_list_unif_v, np_p_value_mean_unif_v, l_pos_unif_v, discovery_unif_v, bootstrap_unif_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'uniform', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                if adaptive_classic_probe_results is not None:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = _probe_results_as_run_results(adaptive_classic_probe_results)
-                else:
-                    pnb_adapt, pnb_adapt_list, counts_adapt_mean, counts_adapt_list, np_p_value_list_adapt, np_p_value_mean_adapt, l_pos_adapt, discovery_adapt, bootstrap_adapt = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, False, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
-                pnb_adapt_v, pnb_adapt_v_list, counts_adapt_v_mean, counts_adapt_v_list, np_p_value_list_adapt_v, np_p_value_mean_adapt_v, l_pos_adapt_v, discovery_adapt_v, bootstrap_adapt_v = adaptative_algorithm_binary.run_experiment(arm_test, mu_0_unif, delta, horizon, 'adaptive', data_test, n_sims, control_arm, init_nb, init_choice, True, is_true_mean, return_discovery_times=True, return_bootstrap_times=True, history_record_every=HISTORY_RECORD_EVERY, deterministic_bootstrap_key=name_data)
+            runner_module = (
+                adaptative_algorithm_continuous
+                if type_de_loi == "normal"
+                else adaptative_algorithm_binary
+            )
+
+            def _run_mode(mode_name, variable_mu_choice):
+                return runner_module.run_experiment(
+                    arm_test,
+                    mu_0_unif,
+                    delta,
+                    horizon,
+                    mode_name,
+                    data_test,
+                    n_sims,
+                    control_arm,
+                    init_nb,
+                    init_choice,
+                    variable_mu_choice,
+                    is_true_mean,
+                    return_discovery_times=True,
+                    return_bootstrap_times=True,
+                    history_record_every=HISTORY_RECORD_EVERY,
+                    deterministic_bootstrap_key=name_data,
+                )
+
+            mode_results = {}
+            mode_jobs = {}
+            if uniform_classic_probe_results is not None:
+                mode_results["unif"] = _probe_results_as_run_results(
+                    uniform_classic_probe_results,
+                    uniform_classic_probe_horizon,
+                    horizon,
+                    HISTORY_RECORD_EVERY,
+                )
+            else:
+                mode_jobs["unif"] = ("uniform", False)
+            mode_jobs["unif_v"] = ("uniform", True)
+            if adaptive_classic_probe_results is not None:
+                mode_results["adapt"] = _probe_results_as_run_results(
+                    adaptive_classic_probe_results,
+                    adaptive_classic_probe_horizon,
+                    horizon,
+                    HISTORY_RECORD_EVERY,
+                )
+            else:
+                mode_jobs["adapt"] = ("adaptive", False)
+            mode_jobs["adapt_v"] = ("adaptive", True)
+
+            if PARALLEL_MODE_RUNS and len(mode_jobs) > 1:
+                max_workers = min(MODE_WORKERS, len(mode_jobs))
+                print(
+                    f"Running {len(mode_jobs)} mode experiment(s) in parallel "
+                    f"with {max_workers} worker(s)."
+                )
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(_run_mode, mode_name, variable_mu_choice): key
+                        for key, (mode_name, variable_mu_choice) in mode_jobs.items()
+                    }
+                    for future in as_completed(futures):
+                        mode_results[futures[future]] = future.result()
+            else:
+                for key, (mode_name, variable_mu_choice) in mode_jobs.items():
+                    mode_results[key] = _run_mode(mode_name, variable_mu_choice)
+
+            (
+                pnb_unif,
+                pnb_unif_list,
+                counts_unif_mean,
+                counts_unif_list,
+                np_p_value_list_unif,
+                np_p_value_mean_unif,
+                l_pos_unif,
+                discovery_unif,
+                bootstrap_unif,
+            ) = mode_results["unif"]
+            (
+                pnb_unif_v,
+                pnb_unif_v_list,
+                counts_unif_v_mean,
+                counts_unif_v_list,
+                np_p_value_list_unif_v,
+                np_p_value_mean_unif_v,
+                l_pos_unif_v,
+                discovery_unif_v,
+                bootstrap_unif_v,
+            ) = mode_results["unif_v"]
+            (
+                pnb_adapt,
+                pnb_adapt_list,
+                counts_adapt_mean,
+                counts_adapt_list,
+                np_p_value_list_adapt,
+                np_p_value_mean_adapt,
+                l_pos_adapt,
+                discovery_adapt,
+                bootstrap_adapt,
+            ) = mode_results["adapt"]
+            (
+                pnb_adapt_v,
+                pnb_adapt_v_list,
+                counts_adapt_v_mean,
+                counts_adapt_v_list,
+                np_p_value_list_adapt_v,
+                np_p_value_mean_adapt_v,
+                l_pos_adapt_v,
+                discovery_adapt_v,
+                bootstrap_adapt_v,
+            ) = mode_results["adapt_v"]
 
             cache_payload = {
                 "cache_version": CACHE_VERSION,
@@ -2603,10 +4101,10 @@ if __name__ == "__main__":
             local_algo_payloads[name_data] = cache_payload
 
         same_set_method_specs = [
-            ("UNIF", "UNIF", discovery_unif),
-            ("ADAPT", "ADAPT", discovery_adapt),
-            ("UNIF VAR", "UNIF VAR", discovery_unif_v),
-            ("ADAPT VAR", "ADAPT VAR", discovery_adapt_v),
+            ("UNIF", "Uniforme", discovery_unif),
+            ("ADAPT", "Adaptatif", discovery_adapt),
+            ("UNIF VAR", "Uniforme controle online", discovery_unif_v),
+            ("ADAPT VAR", "Adaptatif controle online", discovery_adapt_v),
         ]
         same_set_allowed_pairs = [
             ("UNIF", "ADAPT"),
@@ -2617,7 +4115,7 @@ if __name__ == "__main__":
             same_set_method_specs,
             dataset_output_dir / "same_set_discovery_comparison.csv",
             dataset_output_dir / "figure9_same_set_discovery_heatmap.png",
-            f"{_display_algo_name(RUN_ALGO)} on {name_data}",
+            f"{_display_algo_name(RUN_ALGO)} sur {name_data}",
             allowed_pairs=same_set_allowed_pairs,
             control_arm=control_arm,
         )
@@ -2758,7 +4256,7 @@ if __name__ == "__main__":
 
             fig.suptitle(f"Détection des bras significatifs : {name_data}", fontsize=14, fontweight='bold')
             plt.tight_layout()
-            plt.savefig(dataset_output_dir / "figure6.png", dpi=300, bbox_inches="tight")
+            _savefig_with_permission_fallback(dataset_output_dir / "figure6.png", dpi=300, bbox_inches="tight")
             plt.close()
 
         # Appel
@@ -2798,10 +4296,10 @@ if __name__ == "__main__":
             }
 
             panels = [
-                ("CLASSIQUE", [("unif", "Uniform", "#7f7f7f", -0.10),
-                               ("adapt", "Adaptive", "#2ca02c", 0.10)]),
-                ("VAR", [("unif var", "Uniform Var", "#7f7f7f", -0.10),
-                         ("adapt var", "Adaptive Var", "#2ca02c", 0.10)]),
+                ("CLASSIQUE", [("unif", "Uniforme", "#7f7f7f", -0.10),
+                               ("adapt", "Adaptatif", "#2ca02c", 0.10)]),
+                ("CONTROLE ONLINE", [("unif var", "Uniforme controle online", "#7f7f7f", -0.10),
+                                     ("adapt var", "Adaptatif controle online", "#2ca02c", 0.10)]),
             ]
 
             all_found_times = []
@@ -2872,7 +4370,7 @@ if __name__ == "__main__":
                             missed_count += 1
                             ax.scatter(x, y, s=50, color=color, marker="x",
                                        linewidth=1.4, alpha=0.72, zorder=3,
-                                       label=f"{pretty_name} not found" if arm_idx == positives_sorted[0] else "_nolegend_")
+                                       label=f"{pretty_name} non trouve" if arm_idx == positives_sorted[0] else "_nolegend_")
 
                     stats_lines.append(f"{pretty_name}: {found_count}/{len(positives_sorted)}")
 
@@ -2885,28 +4383,28 @@ if __name__ == "__main__":
                         transform=ax.transAxes, ha="right", va="top",
                         fontsize=9, bbox=dict(facecolor="white", edgecolor="none", alpha=0.75))
                 ax.set_title(panel_title)
-                ax.set_xlabel("First discovery time (mean over simulations)")
+                ax.set_xlabel("Premier temps de decouverte (moyenne sur les simulations)")
                 ax.grid(True, alpha=0.3)
                 ax.set_xlim(x_bottom, x_top)
                 y_padding = max(mean_span * 0.08, 4 * y_jitter)
                 ax.set_ylim(min(y_means) - y_padding, max(y_means) + y_padding)
 
-            axes[0].set_ylabel("Full-data empirical mean")
+            axes[0].set_ylabel("Moyenne empirique sur toutes les donnees")
             handles = [
                 plt.Line2D([0], [0], marker="o", color="w",
                            markerfacecolor="#7f7f7f", markeredgecolor="black",
-                           alpha=0.58, markersize=8, label="Uniform"),
+                           alpha=0.58, markersize=8, label="Uniforme"),
                 plt.Line2D([0], [0], marker="o", color="w",
                            markerfacecolor="#1eff1e", markeredgecolor="black",
-                           alpha=0.58, markersize=8, label="Adaptive"),
+                           alpha=0.58, markersize=8, label="Adaptatif"),
                 plt.Line2D([0], [0], marker="x", color="black",
-                           linestyle="None", markersize=8, label="not found"),
+                           linestyle="None", markersize=8, label="non trouve"),
             ]
             fig.legend(handles=handles, loc="lower center", ncol=3,
                        bbox_to_anchor=(0.5, -0.04))
-            fig.suptitle(f"Detected arms: discovery time vs full-data empirical mean ({name_data})",
+            fig.suptitle(f"Bras detectes : temps de decouverte vs moyenne empirique complete ({name_data})",
                          fontsize=14, fontweight="bold")
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            _savefig_with_permission_fallback(output_path, dpi=300, bbox_inches="tight")
             plt.close()
 
             pd.DataFrame(rows_for_csv).to_csv(
@@ -2949,10 +4447,10 @@ if __name__ == "__main__":
         classic_color = '#ff7f0e'
         var_color = '#1f77b4'
         figure1_curves = [
-            (pnb_adapt, "Adaptive", classic_color, "-"),
-            (pnb_unif, "Uniform", classic_color, "--"),
-            (pnb_adapt_v, "Adaptive_Var", var_color, "-"),
-            (pnb_unif_v, "Uniform_Var", var_color, "--"),
+            (pnb_adapt, "Adaptatif", classic_color, "-"),
+            (pnb_unif, "Uniforme", classic_color, "--"),
+            (pnb_adapt_v, "Adaptatif controle online", var_color, "-"),
+            (pnb_unif_v, "Uniforme controle online", var_color, "--"),
         ]
         max_curve = max(
             [1.0] + [
@@ -2963,21 +4461,22 @@ if __name__ == "__main__":
         )
         init_cost = _initialization_cost(init_nb, n_arms, init_choice)
         y_bottom = -0.08 * max_curve
-        _add_initialization_band(ax, init_cost, y_bottom, label="Initialization budget")
+        _add_initialization_band(ax, init_cost, y_bottom, label="Budget d'initialisation")
         for curve, label, color, linestyle in figure1_curves:
             curve_arr = np.asarray(curve, dtype=float)
             ax.plot(time_axis_for(curve_arr), curve_arr, label=label,
                     color=color, linestyle=linestyle, linewidth=2,
                     alpha=0.7)
         ax.axhline(y=1.0, color='gray', linestyle=':')
-        ax.set_title("Discovery speed (pr)")
-        ax.set_xlabel("Rounds after initialization")
-        ax.set_ylabel("Detected positives")
+        ax.set_title("Vitesse de decouverte (pr)")
+        ax.set_xlabel("Tirages apres initialisation")
+        ax.set_ylabel("Bras positifs detectes")
         ax.set_ylim(y_bottom * 1.15, max_curve * 1.08)
         ax.set_xlim(-init_cost if init_cost > 0 else 0, max(horizon, 1))
-        ax.legend()
+        _legend_outside_right(ax)
         ax.grid(True, alpha=0.3)
-        plt.savefig(dataset_output_dir / "figure1.png", dpi=300, bbox_inches="tight")
+        fig.subplots_adjust(right=0.78)
+        _savefig_with_permission_fallback(dataset_output_dir / "figure1.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 8: discovery speed with replacement-draw starts ---
@@ -2992,10 +4491,10 @@ if __name__ == "__main__":
 
         fig, ax = plt.subplots(figsize=(12, 6))
         figure8_specs = [
-            ("Adaptive", pnb_adapt, bootstrap_adapt, classic_color, "-", 0),
-            ("Uniform", pnb_unif, bootstrap_unif, classic_color, "--", 1),
-            ("Adaptive Var", pnb_adapt_v, bootstrap_adapt_v, var_color, "-", 2),
-            ("Uniform Var", pnb_unif_v, bootstrap_unif_v, var_color, "--", 3),
+            ("Adaptatif", pnb_adapt, bootstrap_adapt, classic_color, "-", 0),
+            ("Uniforme", pnb_unif, bootstrap_unif, classic_color, "--", 1),
+            ("Adaptatif controle online", pnb_adapt_v, bootstrap_adapt_v, var_color, "-", 2),
+            ("Uniforme controle online", pnb_unif_v, bootstrap_unif_v, var_color, "--", 3),
         ]
         max_curve = 1.0
         for _, curve, _, _, _, _ in figure8_specs:
@@ -3006,7 +4505,7 @@ if __name__ == "__main__":
         rug_step = max_curve * 0.08
         rug_levels = [-(idx + 1) * rug_step for idx in range(len(figure8_specs))]
         y_bottom = min(rug_levels) - rug_step
-        _add_initialization_band(ax, init_cost, y_bottom, label="Initialization budget")
+        _add_initialization_band(ax, init_cost, y_bottom, label="Budget d'initialisation")
 
         for label, curve, bootstrap_list, color, linestyle, rug_idx in figure8_specs:
             curve_arr = np.asarray(curve, dtype=float)
@@ -3019,16 +4518,16 @@ if __name__ == "__main__":
                 y_values = np.full(times.shape, rug_levels[rug_idx], dtype=float)
                 ax.scatter(times, y_values, color=color, marker="|", s=180,
                            alpha=0.48, linewidths=1.4, label="_nolegend_")
-                ax.text(0, rug_levels[rug_idx], f"{label} replacement starts",
+                ax.text(0, rug_levels[rug_idx], f"{label} : debut bootstrap",
                         va="center", ha="left", fontsize=8, color=color, alpha=0.9)
 
         ax.axhline(y=0, color="gray", linestyle=":", linewidth=1)
         ax.axhline(y=1.0, color="gray", linestyle=":", linewidth=1)
-        ax.set_xlabel("Rounds after initialization")
-        ax.set_ylabel("Detected positives")
+        ax.set_xlabel("Tirages apres initialisation")
+        ax.set_ylabel("Bras positifs detectes")
         ax.set_title(
-            "Discovery speed and first replacement draws\n"
-            "Rug marks show when each arm first exhausts original data and starts sampling with replacement"
+            "Vitesse de decouverte et debut du bootstrap\n"
+            "Les marques indiquent quand chaque bras epuise ses donnees originales et commence le tirage avec remise"
         )
         ax.set_ylim(y_bottom, max_curve * 1.08)
         ax.set_xlim(-init_cost if init_cost > 0 else 0, max(1, horizon))
@@ -3036,11 +4535,11 @@ if __name__ == "__main__":
         handles, labels = ax.get_legend_handles_labels()
         handles.append(plt.Line2D([0], [0], color="black", marker="|",
                                   linestyle="None", markersize=12,
-                                  label="First replacement draw per arm"))
-        labels.append("First replacement draw per arm")
-        ax.legend(handles, labels, loc="upper left")
-        plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure8.png", dpi=300, bbox_inches="tight")
+                                  label="Premier tirage bootstrap par bras"))
+        labels.append("Premier tirage bootstrap par bras")
+        _legend_outside_right(ax, handles=handles, labels=labels)
+        plt.tight_layout(rect=(0, 0, 0.78, 1))
+        _savefig_with_permission_fallback(dataset_output_dir / "figure8.png", dpi=300, bbox_inches="tight")
         plt.close()
 
 
@@ -3059,10 +4558,10 @@ if __name__ == "__main__":
         colors = plt.cm.tab10.colors 
 
         pull_datasets = [
-            ("Uniform: Number of pulls", counts_unif_mean),
-            ("Uniform VAR: Number of pulls", counts_unif_v_mean),
-            ("Adaptive: Number of pulls", counts_adapt_mean),
-            ("Adaptive VAR: Number of pulls", counts_adapt_v_mean),
+            ("Uniforme : nombre de tirages", counts_unif_mean),
+            ("Uniforme controle online : nombre de tirages", counts_unif_v_mean),
+            ("Adaptatif : nombre de tirages", counts_adapt_mean),
+            ("Adaptatif controle online : nombre de tirages", counts_adapt_v_mean),
         ]
 
         for subplot_idx, (title, data_mean) in enumerate(pull_datasets):
@@ -3079,7 +4578,7 @@ if __name__ == "__main__":
                     linewidth = 2.5
                     color = 'black' if is_control else colors[color_counter % len(colors)]
                     alpha = 1.0
-                    label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
+                    label = f"Bras {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
                     if not is_control: color_counter += 1
                 else:
                     linestyle = '-'
@@ -3091,23 +4590,23 @@ if __name__ == "__main__":
                 ax.plot(time_axis_for(data_mean), data_mean[:, arm_idx], label=label, linewidth=linewidth, 
                         linestyle=linestyle, color=color, alpha=alpha)
             
-            ax.set_xlabel("Time (t)")
+            ax.set_xlabel("Temps (t)")
             ax.grid(True, alpha=0.3)
             ax.set_title(title)
 
-        axes[0].set_ylabel("Number of pulls ($T_i(t)$)")
+        axes[0].set_ylabel("Nombre de tirages ($T_i(t)$)")
 
         # A small clean legend with only important arms
         handles, labels = axes[-1].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.0), ncol=6)
 
         plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure2_clean.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure2_clean.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 3: PULL EVOLUTION (SPAGHETTI PLOT) ---
         plt.figure(3+num_graph*10, figsize=(14, 7))
-        plt.title(f"Adaptive: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
+        plt.title(f"Adaptatif : nombre de tirages par bras ({n_sims} simulations)", fontsize=14)
 
         # 1. Identify arms to highlight (e.g. the 5 most-pulled at the end)
         final_pulls = counts_adapt_mean[-1, :]
@@ -3125,7 +4624,7 @@ if __name__ == "__main__":
                 linestyle = '--' if is_control else '-'
                 mean_linewidth = 2.5
                 sim_alpha = 0.15 # Individual simulations remain subtle
-                label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
+                label = f"Bras {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
                 if not is_control: color_counter += 1
             else:
                 base_color = 'gray'
@@ -3143,20 +4642,20 @@ if __name__ == "__main__":
             plt.plot(time_axis_for(counts_adapt_mean), counts_adapt_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
-        plt.xlabel("Time (t)", fontsize=12)
-        plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
+        plt.xlabel("Temps (t)", fontsize=12)
+        plt.ylabel("Nombre de tirages ($T_i(t)$)", fontsize=12)
         plt.grid(True, alpha=0.3)
 
         # Simplified legend
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
         plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure3.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure3.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 3 UNIF VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
         plt.figure(7+num_graph*10, figsize=(14, 7))
-        plt.title(f"Uniform VAR: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
+        plt.title(f"Uniforme controle online : nombre de tirages par bras ({n_sims} simulations)", fontsize=14)
 
         final_pulls_unif_v = counts_unif_v_mean[-1, :]
         top_arms_idx_unif_v = np.argsort(final_pulls_unif_v)[-5:]
@@ -3172,7 +4671,7 @@ if __name__ == "__main__":
                 linestyle = '--' if is_control else '-'
                 mean_linewidth = 2.5
                 sim_alpha = 0.15
-                label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
+                label = f"Bras {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
                 if not is_control:
                     color_counter += 1
             else:
@@ -3189,17 +4688,17 @@ if __name__ == "__main__":
             plt.plot(time_axis_for(counts_unif_v_mean), counts_unif_v_mean[:, arm_idx], label=label, color=base_color,
                      linewidth=mean_linewidth, linestyle=linestyle)
 
-        plt.xlabel("Time (t)", fontsize=12)
-        plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
+        plt.xlabel("Temps (t)", fontsize=12)
+        plt.ylabel("Nombre de tirages ($T_i(t)$)", fontsize=12)
         plt.grid(True, alpha=0.3)
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
         plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure3unifvar.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure3unifvar.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 3 VAR: PULL EVOLUTION (SPAGHETTI PLOT) ---
         plt.figure(6+num_graph*10, figsize=(14, 7))
-        plt.title(f"Adaptive VAR: Number of pulls per arm ({n_sims} simulations)", fontsize=14)
+        plt.title(f"Adaptatif controle online : nombre de tirages par bras ({n_sims} simulations)", fontsize=14)
 
         # 1. Identify arms to highlight for the VAR variant
         # Make sure counts_adapt_v_mean is used here
@@ -3218,7 +4717,7 @@ if __name__ == "__main__":
                 linestyle = '--' if is_control else '-'
                 mean_linewidth = 2.5
                 sim_alpha = 0.15 # Transparence pour les simulations individuelles
-                label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
+                label = f"Bras {arm_idx} (mu={arm_test[arm_idx][0:4]}) {'[Ctrl]' if is_control else '[Top]'}"
                 if not is_control: color_counter += 1
             else:
                 base_color = 'gray'
@@ -3236,27 +4735,27 @@ if __name__ == "__main__":
             plt.plot(time_axis_for(counts_adapt_v_mean), counts_adapt_v_mean[:, arm_idx], label=label, color=base_color, 
                     linewidth=mean_linewidth, linestyle=linestyle)
 
-        plt.xlabel("Time (t)", fontsize=12)
-        plt.ylabel("Number of pulls ($T_i(t)$)", fontsize=12)
+        plt.xlabel("Temps (t)", fontsize=12)
+        plt.ylabel("Nombre de tirages ($T_i(t)$)", fontsize=12)
         plt.grid(True, alpha=0.3)
 
         # Simplified legend
         plt.legend(loc='upper left', fontsize=10, framealpha=0.9)
 
-        print("Displaying Adaptive VAR plots...")
+        print("Affichage des graphes adaptatif controle online...")
         plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure3var.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure3var.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # --- PLOT 4: P-VALUES ---
         fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-        fig.suptitle("Evolution of P-values by iteration and arm", fontsize=16)
+        fig.suptitle("Evolution des p-valeurs par iteration et par bras", fontsize=16)
 
         datasets = [
-            ("Uniform", np_p_value_mean_unif),
-            ("Uniform VAR", np_p_value_mean_unif_v),
-            ("Adaptive", np_p_value_mean_adapt),
-            ("Adaptive VAR", np_p_value_mean_adapt_v)
+            ("Uniforme", np_p_value_mean_unif),
+            ("Uniforme controle online", np_p_value_mean_unif_v),
+            ("Adaptatif", np_p_value_mean_adapt),
+            ("Adaptatif controle online", np_p_value_mean_adapt_v)
         ]
 
         # Define the confidence threshold (edit this variable if needed)
@@ -3281,7 +4780,7 @@ if __name__ == "__main__":
                     linestyle = '--' if is_control else '-'
                     linewidth = 2.0
                     alpha = 1.0
-                    label = f"Arm {arm_idx} (mu={arm_test[arm_idx][0:4]})"
+                    label = f"Bras {arm_idx} (mu={arm_test[arm_idx][0:4]})"
                     if not is_control: color_counter += 1
                 else:
                     color = 'gray'
@@ -3300,10 +4799,10 @@ if __name__ == "__main__":
             
             # Horizontal threshold line
             ax.axhline(y=delta_threshold, color='red', linestyle=':', linewidth=2, 
-                    label=f'Threshold ($\\delta={delta_threshold}$)')
+                    label=f'Seuil ($\\delta={delta_threshold}$)')
             
-            ax.set_xlabel("Time (t)")
-            ax.set_ylabel("P-value (Log Scale)")
+            ax.set_xlabel("Temps (t)")
+            ax.set_ylabel("p-valeur (echelle log)")
             ax.grid(True, which="both", ls="-", alpha=0.2) # Grid adapted to log scale
 
         # Single legend at the bottom
@@ -3316,7 +4815,7 @@ if __name__ == "__main__":
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25) # Space for the legend
 
-        plt.savefig(dataset_output_dir / "figure4.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure4.png", dpi=300, bbox_inches="tight")
         plt.close()
 
     # --- PLOT 5: P-VALUES (1 Colonne, 3 Trajectoires par Graphe) ---
@@ -3342,36 +4841,39 @@ if __name__ == "__main__":
             arm_name = arm_test[arm_idx]
             
             # Add a title to identify which arm this row refers to
-            ax.set_title(f"P-values evolution for Arm {arm_name}")
+            ax.set_title(f"Evolution des p-valeurs pour le bras {arm_name}")
 
             # Plot the 3 trajectories on the SAME chart
-            ax.plot(time_axis_for(np_p_value_mean_unif), np_p_value_mean_unif[:, arm_idx], label="Uniform", linewidth=2, color=color_unif)
-            ax.plot(time_axis_for(np_p_value_mean_unif_v), np_p_value_mean_unif_v[:, arm_idx], label="Uniform VAR", linewidth=2, color=color_unif_v)
-            ax.plot(time_axis_for(np_p_value_mean_adapt), np_p_value_mean_adapt[:, arm_idx], label="Adaptative", linewidth=2, color=color_adapt)
-            ax.plot(time_axis_for(np_p_value_mean_adapt_v), np_p_value_mean_adapt_v[:, arm_idx], label="Adaptative VAR", linewidth=2, color=color_adapt_v)
+            ax.plot(time_axis_for(np_p_value_mean_unif), np_p_value_mean_unif[:, arm_idx], label="Uniforme", linewidth=2, color=color_unif)
+            ax.plot(time_axis_for(np_p_value_mean_unif_v), np_p_value_mean_unif_v[:, arm_idx], label="Uniforme controle online", linewidth=2, color=color_unif_v)
+            ax.plot(time_axis_for(np_p_value_mean_adapt), np_p_value_mean_adapt[:, arm_idx], label="Adaptatif", linewidth=2, color=color_adapt)
+            ax.plot(time_axis_for(np_p_value_mean_adapt_v), np_p_value_mean_adapt_v[:, arm_idx], label="Adaptatif controle online", linewidth=2, color=color_adapt_v)
             
-            ax.set_ylabel("P value")
+            ax.set_ylabel("p-valeur")
             ax.legend(loc="upper right", fontsize="small")
             ax.grid(True, alpha=0.3)
 
         # Add the x-axis only on the bottom-most chart
-        axes[-1].set_xlabel("Time (t)")
+        axes[-1].set_xlabel("Temps (t)")
 
         plt.tight_layout()
-        plt.savefig(dataset_output_dir / "figure5.png", dpi=300, bbox_inches="tight")
+        _savefig_with_permission_fallback(dataset_output_dir / "figure5.png", dpi=300, bbox_inches="tight")
         # plt.show()
         num_graph+=1
         plt.close()
 
     generate_local_figure10_same_set_adapt_vs_uniform(
         output_root,
-        DATASET_KEYS,
+        RUN_DATASETS if ONLY_REPLOT else DATASET_KEYS,
         payloads=local_algo_payloads,
     )
 
     if GENERATE_ALGO_COMPARISON:
+        comparison_algos = RUN_ALGOS if ONLY_REPLOT else list(ALGORITHM_CONFIGS.keys())
+        comparison_datasets = RUN_DATASETS if ONLY_REPLOT else _comparison_dataset_scope()
         generate_algorithm_comparison_figures(
             git_root,
-            list(ALGORITHM_CONFIGS.keys()),
-            _comparison_dataset_scope(),
+            comparison_algos,
+            comparison_datasets,
         )
+
