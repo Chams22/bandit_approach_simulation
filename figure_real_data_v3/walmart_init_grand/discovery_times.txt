@@ -1,0 +1,52 @@
+Special Walmart large-init discovery times
+
+=== UNIF ===
+Simulation 1
+arm 0: 0
+arm 1: 0
+arm 2: 0
+arm 5: 0
+arm 6: 0
+arm 7: 0
+arm 10: 0
+arm 11: 0
+arm 14: 0
+arm 15: 0
+arm 16: 0
+arm 17: 0
+arm 18: 0
+arm 19: 0
+arm 20: 0
+arm 13: 15884
+arm 8: 20180
+arm 9: 68366
+arm 21: 92045
+arm 4: 212065
+arm 22: 225308
+arm 12: 321553
+
+=== ADAPT ===
+Simulation 1
+arm 0: 0
+arm 1: 0
+arm 2: 0
+arm 5: 0
+arm 6: 0
+arm 7: 0
+arm 10: 0
+arm 11: 0
+arm 14: 0
+arm 15: 0
+arm 16: 0
+arm 17: 0
+arm 18: 0
+arm 19: 0
+arm 20: 0
+arm 13: 709
+arm 8: 3610
+arm 9: 5695
+arm 21: 12263
+arm 4: 23841
+arm 12: 31626
+arm 22: 41084
+
