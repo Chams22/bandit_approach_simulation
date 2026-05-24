@@ -213,3 +213,4 @@ __marimo__/
 # Execution caches
 *.pkl
 **/run_experiment_cache.pkl
+streamlit_visu/batch_results/
