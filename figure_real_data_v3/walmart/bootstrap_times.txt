@@ -1,0 +1,12 @@
+First replacement-draw time by simulation and arm
+
+A listed arm has exhausted its original observations and is now sampled with replacement.
+
+   UNIF
+1. {}
+   UNIF VAR
+1. {}
+   ADAPT
+1. {3: 168585}
+   ADAPT VAR
+1. {1: 405237, 6: 127558, 7: 280715, 14: 254239, 19: 358921}

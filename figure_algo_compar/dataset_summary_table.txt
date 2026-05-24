@@ -1,0 +1,10 @@
+Parametre        | PENN     | EXERCISE  | EFFORT      | WALMART 
+-----------------+----------+-----------+-------------+---------
+Nombre de bras   | 20       | 54        | 60          | 23      
+Type de donnees  | Binaires | Continues | Continues   | Binaires
+Donnees/bras max | 2397     | 4606      | 438         | 34623   
+Donnees/bras min | 2295     | 412       | 5           | 27365   
+Moyenne max      | 0.467    | 0.3241    | -376.2      | 0.3231  
+Moyenne min      | 0.4177   | 0.0703    | -1525.5982  | 0.294   
+Variance max     | 0.249    | 1.7056    | 992751.9053 | 0.2187  
+Variance min     | 0.2433   | 1.1177    | 165500.7    | 0.2076  

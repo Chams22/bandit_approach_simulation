@@ -1,0 +1,737 @@
+import numpy as np
+import hashlib
+from tqdm import tqdm
+
+
+def _deterministic_bootstrap_observation(arm_data, bootstrap_key, no_sim, arm, pull_index):
+    raw = f"{bootstrap_key}|{no_sim}|{arm}|{pull_index}".encode("utf-8")
+    idx = int.from_bytes(hashlib.blake2b(raw, digest_size=8).digest(), "big") % len(arm_data)
+    return arm_data[idx]
+
+
+# -----------------------------------------------------------------------------
+# Fused V2 for Continuous or Binary Data
+# -----------------------------------------------------------------------------
+# V2 BH supports Normal Mixture confidence sequences only:
+#   'normal_mixture'  — Original V_hat (sum of squared prediction errors), rigorous
+# Betting BH is intentionally reserved for V3.
+# -----------------------------------------------------------------------------
+
+def _phi_vector(algo, counts, delta_val, var_stats):
+    counts = np.asarray(counts, dtype=float)
+    var_stats = np.asarray(var_stats, dtype=float)
+    phi_vals = np.full(counts.shape, np.inf, dtype=float)
+    valid = counts > 0
+    if not np.any(valid):
+        return phi_vals
+
+    var_plus_rho = var_stats[valid] + algo.rho
+    log_term = np.log(np.sqrt(var_plus_rho / algo.rho) / delta_val)
+    log_term = np.maximum(0.0, log_term)
+    phi_vals[valid] = np.sqrt(2 * var_plus_rho * log_term) / counts[valid]
+    return phi_vals
+
+
+def _two_sample_nm_lcb_discoveries(algo, k_start, delta_denominator,
+                                   phi_delta_factor=0.5):
+    control_idx = algo.control_arm_idx
+    treatment_idx = np.flatnonzero(np.arange(algo.n) != control_idx)
+    if treatment_idx.size == 0:
+        return set()
+
+    gaps = algo.emp_means[treatment_idx] - algo.emp_means[control_idx]
+    treatment_counts = algo.counts[treatment_idx]
+    treatment_vars = algo.emp_vars[treatment_idx]
+    control_count = algo.counts[control_idx]
+    control_var = algo.emp_vars[control_idx]
+
+    for k in range(k_start, 0, -1):
+        effective_delta = algo.delta * k / delta_denominator
+        # Union bound: split the level across the arm and control CIs.
+        phi_delta = effective_delta * phi_delta_factor
+        phi_ctrl = algo.phi(control_count, phi_delta, control_var)
+        scores = gaps - _phi_vector(algo, treatment_counts, phi_delta,
+                                    treatment_vars) - phi_ctrl
+        passing_idx = treatment_idx[scores >= 0]
+        if passing_idx.size >= k:
+            return set(passing_idx.tolist())
+    return set()
+
+
+class JamiesonJainAlgo:
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture', control_arm_idx=None):
+        """
+        Initializes the adaptive bandit algorithm.
+
+        Parameters
+        ----------
+        n_arms : int
+            The total number of arms (distributions) available.
+        mu_0 : float
+            The baseline threshold. We want to identify arms with mean > mu_0.
+        delta : float
+            The confidence level / False Discovery Rate (FDR) parameter (e.g., 0.05).
+        rho : float
+            Tuning parameter for Normal Mixture CS variants (prior variance).
+            Default: 0.01.
+        cs_type : str
+            Confidence sequence type:
+            - 'normal_mixture': Original V_hat NM (Howard et al., 2021). Rigorous.
+        control_arm_idx : int or None
+            If set, enables two-sample CS mode: tests mu_arm - mu_control > 0
+            instead of mu_arm > mu_0. Default: None (single-sample mode).
+        """
+        if cs_type != 'normal_mixture':
+            raise ValueError("V2 cs_type must be 'normal_mixture'. Use V3 for betting BH.")
+
+        self.n = n_arms
+        self.mu_0 = mu_0
+        self.delta = delta
+        self.rho = max(float(rho), 1e-12)
+        self.cs_type = cs_type
+        self.control_arm_idx = control_arm_idx
+
+        self.counts = np.zeros(n_arms, dtype=int)
+        self.emp_means = np.zeros(n_arms, dtype=float)
+        self.emp_vars = np.zeros(n_arms, dtype=float)
+        self.time = 0
+        self.S_t = set()
+
+        # History for visualization
+        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+
+    # -------------------------------------------------------------------------
+    # Statistics update
+    # -------------------------------------------------------------------------
+    def _update_stats(self, arm_idx, observation):
+        """
+        Updates empirical statistics for a given arm.
+
+        Accumulates V_hat = sum (X_i - X_bar_{i-1})^2 for the Normal Mixture CS.
+        """
+        n = self.counts[arm_idx]
+        old_mean = self.emp_means[arm_idx]
+
+        # --- Update mean ---
+        self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
+
+        # --- Update variance accumulator ---
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
+
+    # -------------------------------------------------------------------------
+    # Confidence radius phi
+    # -------------------------------------------------------------------------
+    def phi(self, t, delta_val, var_stat):
+        """
+        Normal Mixture confidence sequence radius (Howard et al., 2021).
+        Used for arm selection (UCB) in all modes, and for p-values in NM modes.
+        """
+        if t == 0:
+            return float('inf')
+
+        log_term = np.log(np.sqrt((var_stat + self.rho) / self.rho) / delta_val)
+        log_term = max(0.0, log_term)
+
+        return np.sqrt(2 * (var_stat + self.rho) * log_term) / t
+
+    # -------------------------------------------------------------------------
+    # Anytime p-value
+    # -------------------------------------------------------------------------
+    def get_anytime_pvalue(self, arm_idx):
+        """
+        Computes the anytime p-value for a given arm.
+
+        - 'normal_mixture': Closed-form NM inversion.
+        """
+        t = self.counts[arm_idx]
+        if t == 0:
+            return 1.0
+
+        mu0_ref = self.emp_means[self.control_arm_idx] if self.control_arm_idx is not None else self.mu_0
+        diff = self.emp_means[arm_idx] - mu0_ref
+        if diff <= 0:
+            return 1.0
+
+        var_stat = self.emp_vars[arm_idx]
+        p_value = (np.sqrt((var_stat + self.rho) / self.rho)
+                   * np.exp(-diff ** 2 * t ** 2 / (2 * (var_stat + self.rho))))
+        return float(np.clip(p_value, 1e-300, 1.0))
+
+    # -------------------------------------------------------------------------
+    # Init process
+    # -------------------------------------------------------------------------
+    def init_process(self, data):
+        """
+        Initializes the algorithm with pre-collected data for each arm.
+        Updates statistics observation-by-observation and runs BH afterwards.
+        """
+        for arm_idx, arm_data in enumerate(data):
+            for obs in arm_data:
+                self._update_stats(arm_idx, obs)
+                self.counts[arm_idx] += 1
+                self.time += 1
+                self.counts_evolution.append(self.counts.copy())
+
+        # --- Automatic rho calibration from init data ---
+        var_estimates = [self.emp_vars[i] / max(self.counts[i] - 1, 1)
+                         for i in range(self.n) if self.counts[i] > 1]
+        if var_estimates:
+            self.rho = max(float(np.median(var_estimates)), 1e-12)
+
+        # --- BH after init (single-sample only) ---
+        # In two-sample mode (control_arm_idx set), get_anytime_pvalue ignores control
+        # arm uncertainty → over-optimistic detections. The main loop uses the proper
+        # two-sample LCB, so we skip BH here and let it run at the first real step.
+        if self.control_arm_idx is None:
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            for k in range(self.n, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / self.n:
+                    for rank in range(k):
+                        self.S_t.add(p_values_with_idx[rank][1])
+                    break
+        else:
+            self.S_t.update(_two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            ))
+
+    # -------------------------------------------------------------------------
+    # Arm selection (UCB)
+    # -------------------------------------------------------------------------
+    def select_arm(self):
+        """
+        UCB-based arm selection. Uses Normal Mixture phi for exploration.
+        """
+        unsampled = [i for i in range(self.n) if self.counts[i] == 0]
+        if unsampled:
+            return unsampled[0]
+
+        if self.control_arm_idx is not None:
+            treatment_candidates = [
+                i for i in range(self.n)
+                if i != self.control_arm_idx and i not in self.S_t
+            ]
+            if not treatment_candidates:
+                return "stop"
+
+            ucb_delta = self.delta / max(self.n, 1)
+            phi_control = self.phi(
+                self.counts[self.control_arm_idx],
+                ucb_delta,
+                self.emp_vars[self.control_arm_idx],
+            )
+            best_ucb = 2.0 * phi_control
+            selected = self.control_arm_idx
+
+            for i in treatment_candidates:
+                ucb = (self.emp_means[i] - self.emp_means[self.control_arm_idx]) \
+                      + self.phi(self.counts[i], ucb_delta, self.emp_vars[i]) \
+                      + phi_control
+                if ucb > best_ucb:
+                    best_ucb = ucb
+                    selected = i
+            return selected
+
+        candidates = [i for i in range(self.n) if i not in self.S_t]
+        if not candidates:
+            return "stop"
+
+        best_ucb = -float('inf')
+        selected = candidates[0]
+        ucb_delta = self.delta / max(self.n, 1)
+
+        for i in candidates:
+            ucb = self.emp_means[i] + self.phi(self.counts[i], ucb_delta, self.emp_vars[i])
+            if ucb > best_ucb:
+                best_ucb = ucb
+                selected = i
+        return selected
+
+
+    def select_arm_old(self):
+        """
+        Confirmation pure
+        """
+        unsampled = [i for i in range(self.n) if self.counts[i] == 0]
+        if unsampled:
+            return unsampled[0]
+        
+        candidates = [i for i in range(self.n) if i not in self.S_t]
+        if not candidates:
+            return "stop"
+
+        best_pval = float('inf')
+        selected = candidates[0]
+        for i in candidates:
+            pv = self.get_anytime_pvalue(i)
+            if pv < best_pval:
+                best_pval = pv
+                selected = i
+        return selected
+    
+    # -------------------------------------------------------------------------
+    # BH update (non-optimized, LCB-based)
+    # -------------------------------------------------------------------------
+    def bh_update(self, arm_idx, observation):
+        """
+        Updates state and runs LCB-based BH procedure.
+        """
+        self._update_stats(arm_idx, observation)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy())
+
+        current_St = set()
+        for k in range(self.n, 0, -1):
+            effective_delta = self.delta * k / self.n
+            passing_arms = []
+            for i in range(self.n):
+                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, self.emp_vars[i])
+                if lcb >= self.mu_0:
+                    passing_arms.append(i)
+            if len(passing_arms) >= k:
+                current_St = set(passing_arms)
+                break
+        self.S_t.update(current_St)
+
+    # -------------------------------------------------------------------------
+    # BH update (optimized, p-value-sorted, O(n log n))
+    # -------------------------------------------------------------------------
+    def bh_update_optimized(self, arm_idx, observation):
+        """
+        Updates state and runs p-value-sorted BH procedure in O(n log n).
+        """
+        self._update_stats(arm_idx, observation)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy())
+
+        p_values = [1.0] * self.n
+        current_St = set()
+
+        if self.control_arm_idx is not None:
+            # Two-sample NM LCB
+            current_St = _two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            )
+        else:
+            # Single-sample: p-values sorted BH
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+            p_values = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            for k in range(self.n, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / self.n:
+                    for rank in range(k):
+                        current_St.add(p_values_with_idx[rank][1])
+                    break
+
+        self.S_t.update(current_St)
+        return p_values
+
+
+# =============================================================================
+# UNIFORM ALGORITHM
+# =============================================================================
+class UniformAlgo:
+    def __init__(self, n_arms, mu_0, delta, rho=0.01, cs_type='normal_mixture', control_arm_idx=None):
+        """
+        Uniform (random) sampling algorithm with the same CS options.
+        """
+        if cs_type != 'normal_mixture':
+            raise ValueError("V2 cs_type must be 'normal_mixture'. Use V3 for betting BH.")
+
+        self.n = n_arms
+        self.mu_0 = mu_0
+        self.delta = delta
+        self.rho = max(float(rho), 1e-12)
+        self.cs_type = cs_type
+        self.control_arm_idx = control_arm_idx
+
+        self.counts = np.zeros(n_arms, dtype=int)
+        self.emp_means = np.zeros(n_arms, dtype=float)
+        self.emp_vars = np.zeros(n_arms, dtype=float)
+        self.time = 0
+        self.S_t = set()
+        self._cycle_next_arm = 0
+
+        self.counts_evolution = [np.zeros(n_arms, dtype=int)]
+    def init_process(self, data):
+        for arm_idx, arm_data in enumerate(data):
+            for obs in arm_data:
+                self._update_stats(arm_idx, obs)
+                self.counts[arm_idx] += 1
+                self.time += 1
+                self.counts_evolution.append(self.counts.copy())
+
+        if self.control_arm_idx is None:
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            for k in range(self.n, 0, -1):
+                if p_values_with_idx[k - 1][0] <= self.delta * k / self.n:
+                    for rank in range(k):
+                        self.S_t.add(p_values_with_idx[rank][1])
+                    break
+        else:
+            self.S_t.update(_two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            ))
+    def _update_stats(self, arm_idx, observation):
+        """Same update logic as JamiesonJainAlgo."""
+        n = self.counts[arm_idx]
+        old_mean = self.emp_means[arm_idx]
+
+        self.emp_means[arm_idx] = (old_mean * n + observation) / (n + 1)
+        self.emp_vars[arm_idx] += (observation - old_mean) ** 2
+
+    def phi(self, t, delta_val, var_stat):
+        if t == 0:
+            return float('inf')
+        log_term = np.log(np.sqrt((var_stat + self.rho) / self.rho) / delta_val)
+        log_term = max(0.0, log_term)
+        return np.sqrt(2 * (var_stat + self.rho) * log_term) / t
+
+    def get_anytime_pvalue(self, arm_idx):
+        t = self.counts[arm_idx]
+        if t == 0:
+            return 1.0
+        mu0_ref = self.emp_means[self.control_arm_idx] if self.control_arm_idx is not None else self.mu_0
+        diff = self.emp_means[arm_idx] - mu0_ref
+        if diff <= 0:
+            return 1.0
+
+        var_stat = self.emp_vars[arm_idx]
+        p_value = (np.sqrt((var_stat + self.rho) / self.rho)
+                   * np.exp(-diff ** 2 * t ** 2 / (2 * (var_stat + self.rho))))
+        return float(np.clip(p_value, 1e-300, 1.0))
+
+    def _select_cyclic(self, candidates):
+        if not candidates:
+            return "stop"
+        candidate_set = set(candidates)
+        for offset in range(self.n):
+            arm = (self._cycle_next_arm + offset) % self.n
+            if arm in candidate_set:
+                self._cycle_next_arm = (arm + 1) % self.n
+                return arm
+        return "stop"
+
+    def select_arm(self):
+        return self._select_cyclic(list(range(self.n)))
+
+    def bh_update_optimized(self, arm_idx, observation):
+        self._update_stats(arm_idx, observation)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy())
+
+        p_values = [1.0] * self.n
+        current_St = set()
+
+        if self.control_arm_idx is not None:
+            current_St = _two_sample_nm_lcb_discoveries(
+                self,
+                k_start=self.n,
+                delta_denominator=self.n,
+            )
+        else:
+            p_values_with_idx = [(self.get_anytime_pvalue(i), i) for i in range(self.n)]
+            p_values = [pv for pv, _ in sorted(p_values_with_idx, key=lambda x: x[1])]
+            p_values_with_idx.sort(key=lambda x: x[0])
+            for k in range(self.n, 0, -1):
+                p_val_k = p_values_with_idx[k - 1][0]
+                effective_delta = self.delta * k / self.n
+                if p_val_k <= effective_delta:
+                    for rank in range(k):
+                        current_St.add(p_values_with_idx[rank][1])
+                    break
+
+        self.S_t.update(current_St)
+        return p_values
+
+    def bh_update(self, arm_idx, observation):
+        self._update_stats(arm_idx, observation)
+        self.counts[arm_idx] += 1
+        self.time += 1
+        self.counts_evolution.append(self.counts.copy())
+
+        current_St = set()
+        for k in range(self.n, 0, -1):
+            effective_delta = self.delta * k / self.n
+            passing_arms = []
+            for i in range(self.n):
+                lcb = self.emp_means[i] - self.phi(self.counts[i], effective_delta, self.emp_vars[i])
+                if lcb >= self.mu_0:
+                    passing_arms.append(i)
+            if len(passing_arms) >= k:
+                current_St = set(passing_arms)
+                break
+        self.S_t.update(current_St)
+
+
+# =============================================================================
+# SIMULATION ENGINE
+# =============================================================================
+def _should_record_history(step, horizon, history_record_every):
+    return step == horizon or step % history_record_every == 0
+
+
+def _run_single_simulation(algo, no_sim, all_arm_data, horizon, mode,
+                           control_arm, init_nb, init_choice, variable_mu_choice,
+                           n_arms, is_true_mean, true_positives,
+                           history_record_every=1,
+                           stop_when_all_non_control_found=False,
+                           stop_control_arm=None,
+                           deterministic_bootstrap_key="default"):
+    """
+    Runs a single simulation for a given algorithm instance.
+    Uses sequential data access (not bootstrap) for fair comparison.
+    """
+    p_values_list = []
+    all_arm_counts = [0 for _ in range(n_arms)]
+    run_pr = []
+    bootstrap_start_times = {}
+    history_record_every = max(1, int(history_record_every))
+    stop_target_arms = set(range(n_arms))
+    if stop_control_arm is not None:
+        stop_target_arms.discard(int(stop_control_arm))
+
+    def all_stop_targets_found():
+        return (
+            stop_when_all_non_control_found
+            and stop_target_arms.issubset({int(arm) for arm in algo.S_t})
+        )
+
+    def fill_remaining(current_done):
+        remaining_steps = horizon - current_done
+        if remaining_steps <= 0:
+            return
+        if is_true_mean:
+            nb_found = len(algo.S_t.intersection(true_positives))
+            last_pr = nb_found / len(true_positives) if true_positives else 1.0
+        else:
+            last_pr = len(algo.S_t)
+        run_pr.extend([last_pr] * remaining_steps)
+
+        last_counts = algo.counts_evolution[-1] if algo.counts_evolution else algo.counts.copy()
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                algo.counts_evolution.append(last_counts.copy())
+
+        last_p_values = p_values_list[-1] if p_values_list else [1.0 for _ in range(n_arms)]
+        for step in range(current_done + 1, horizon + 1):
+            if _should_record_history(step, horizon, history_record_every):
+                p_values_list.append(list(last_p_values))
+
+    # --- Init ---
+    if init_choice:
+        if init_nb > 0:
+            data_init = []
+            for arm in range(n_arms):
+                data_init_arm = all_arm_data[no_sim][arm][0:init_nb]
+                data_init.append(data_init_arm)
+            algo.init_process(data_init)
+            all_arm_counts = [init_nb for _ in range(n_arms)]
+            algo.counts_evolution = [algo.counts.copy()]
+
+    discovery_times = {int(arm): 0 for arm in algo.S_t}
+    if all_stop_targets_found():
+        fill_remaining(0)
+        return run_pr, p_values_list, discovery_times, bootstrap_start_times
+
+    # --- Main loop ---
+    for t in range(0, horizon):
+
+        # Select arm
+        if variable_mu_choice:
+            # Two-sample mode: mu_0 update handled internally via control_arm_idx
+            arm = algo.select_arm()
+            # Force the draw of the control arm to reduce its uncertainty
+            if all_arm_counts[control_arm] < max(all_arm_counts):
+                arm = control_arm
+        else:
+            arm = algo.select_arm()
+
+        if arm == "stop":
+            print("stop triggered")
+            fill_remaining(len(run_pr))
+            break
+
+        else:
+            current_step = len(run_pr) + 1
+            # Sequential data access for fair comparison
+            len_arm = len(all_arm_data[no_sim][arm])
+            if all_arm_counts[arm] >= len_arm:
+                bootstrap_start_times.setdefault(int(arm), current_step)
+                observation = _deterministic_bootstrap_observation(
+                    all_arm_data[no_sim][arm],
+                    deterministic_bootstrap_key,
+                    no_sim,
+                    arm,
+                    all_arm_counts[arm],
+                )
+            else:
+                observation = all_arm_data[no_sim][arm][all_arm_counts[arm]]
+
+            all_arm_counts[arm] += 1
+
+            p_values_t = algo.bh_update_optimized(arm, observation)
+            if _should_record_history(current_step, horizon, history_record_every):
+                p_values_list.append(p_values_t)
+            else:
+                algo.counts_evolution.pop()
+
+            for discovered_arm in algo.S_t:
+                discovery_times.setdefault(int(discovered_arm), current_step)
+
+            if is_true_mean:
+                nb_found = len(algo.S_t.intersection(true_positives))
+                current_tpr = nb_found / len(true_positives) if true_positives else 1.0
+                run_pr.append(current_tpr)
+            else:
+                nb_found = len(algo.S_t)
+                run_pr.append(nb_found)
+
+            if all_stop_targets_found():
+                fill_remaining(current_step)
+                break
+
+    return run_pr, p_values_list, discovery_times, bootstrap_start_times
+
+
+def run_experiment(arms, mu_0, delta, horizon, mode, all_arm_data, n_simulations,
+                   control_arm, init_nb, init_choice, variable_mu_choice, is_true_mean,
+                   rho=0.01, cs_type='normal_mixture', return_discovery_times=False,
+                   return_bootstrap_times=False, history_record_every=1,
+                   stop_when_all_non_control_found=False,
+                   stop_control_arm=None,
+                   deterministic_bootstrap_key="default"):
+    """
+    Runs the bandit experiment.
+
+    Parameters
+    ----------
+    arms : array-like
+        The arms of the bandit (true means if known).
+    mu_0 : float
+        The null hypothesis mean.
+    delta : float
+        The significance level.
+    horizon : int
+        The total budget per simulation.
+    mode : str
+        'adaptive' or 'uniform'.
+    all_arm_data : list of list of list
+        Pre-generated rewards [sim][arm][pull].
+    n_simulations : int
+        Number of independent runs.
+    control_arm : int
+        Index of the control arm.
+    init_nb : int
+        Number of initial pulls per arm.
+    init_choice : bool
+        Whether to use the initialization process.
+    variable_mu_choice : bool
+        Whether to use variable mu_0 from control arm.
+    is_true_mean : bool
+        Whether to compute TPR (requires known arm means).
+    rho : float
+        NM tuning parameter. Default: 0.01.
+    cs_type : str
+        Must be 'normal_mixture'.
+    Returns
+    -------
+    pnb_history_mean, pnb_list, counts_history_mean, counts_list,
+    np_p_values_list_by_sim, np_p_values_mean, list_positive
+    """
+    print(f"EXECUTION RUN EXP — cs_type={cs_type}")
+    n_arms = len(arms)
+    history_record_every = max(1, int(history_record_every))
+    if is_true_mean:
+        if variable_mu_choice:
+            true_positives = [i for i, m in enumerate(arms)
+                              if i != control_arm and m > arms[control_arm]]
+        else:
+            true_positives = [i for i, m in enumerate(arms) if m > mu_0]
+    else:
+        true_positives = None
+
+    pnb_list = []
+    counts_list = []
+    p_values_list_by_sim = []
+    list_positive = []
+    discovery_times_list = []
+    bootstrap_times_list = []
+    n_history_points = 1 + sum(
+        1 for step in range(1, horizon + 1)
+        if _should_record_history(step, horizon, history_record_every)
+    )
+    counts_evolution_sum = np.zeros((n_history_points, n_arms))
+
+    # --- Algo factory ---
+    algo_factory = {
+        'adaptive': lambda: JamiesonJainAlgo(n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+                                             control_arm_idx=control_arm if variable_mu_choice else None),
+        'uniform': lambda: UniformAlgo(n_arms, mu_0, delta, rho=rho, cs_type=cs_type,
+                                       control_arm_idx=control_arm if variable_mu_choice else None),
+    }
+
+    if mode not in algo_factory:
+        raise ValueError("Algorithm name not detected, choose between uniform and adaptive")
+
+    mode_label = f"{mode.upper()} VAR" if variable_mu_choice else mode.upper()
+    print(f"Simulation Mode: {mode_label} | CS: {cs_type} | rho={rho} ({n_simulations} runs)")
+
+    # --- Simulation loop ---
+    for no_sim in tqdm(range(n_simulations)):
+
+        algo = algo_factory[mode]()
+
+        run_pr, p_values_list, discovery_times, bootstrap_start_times = _run_single_simulation(
+            algo, no_sim, all_arm_data, horizon, mode,
+            control_arm, init_nb, init_choice, variable_mu_choice,
+            n_arms, is_true_mean, true_positives, history_record_every,
+            stop_when_all_non_control_found=stop_when_all_non_control_found,
+            stop_control_arm=control_arm if stop_control_arm is None else stop_control_arm,
+            deterministic_bootstrap_key=deterministic_bootstrap_key,
+        )
+
+        list_positive.append(algo.S_t)
+
+        pnb_i = np.array(run_pr)
+        pnb_list.append(pnb_i)
+
+        counts_arr = np.array(algo.counts_evolution)
+        counts_list.append(counts_arr)
+        counts_evolution_sum += counts_arr
+        p_values_list_by_sim.append(p_values_list)
+        discovery_times_list.append(discovery_times)
+        bootstrap_times_list.append(bootstrap_start_times)
+
+    # --- Aggregation ---
+    pnb_history_mean = np.mean(np.array(pnb_list), axis=0)
+    counts_history_mean = counts_evolution_sum / n_simulations
+
+    max_length = max(len(arr) for arr in p_values_list_by_sim)
+    n_sims_total = len(p_values_list_by_sim)
+    padded_array = np.full((n_sims_total, max_length, n_arms), np.nan)
+    for i, arr in enumerate(p_values_list_by_sim):
+        arr_np = np.array(arr)
+        padded_array[i, :arr_np.shape[0], :] = arr_np
+    np_p_values_mean = np.nanmean(padded_array, axis=0)
+    np_p_values_list_by_sim = padded_array
+
+    result = (pnb_history_mean, pnb_list, counts_history_mean, counts_list,
+              np_p_values_list_by_sim, np_p_values_mean, list_positive)
+    if return_discovery_times and return_bootstrap_times:
+        return (*result, discovery_times_list, bootstrap_times_list)
+    if return_discovery_times:
+        return (*result, discovery_times_list)
+    if return_bootstrap_times:
+        return (*result, bootstrap_times_list)
+    return result
