@@ -1,8 +1,27 @@
 # Bandit Approach Simulation
 
-Simulation and analysis of adaptive bandit algorithms for sequential multiple testing with FDR control, based on the NeurIPS 2018 paper *"A Bandit Approach to Sequential Experimental Design with False Discovery Control"* (Jamieson & Jain).
+[![tests](https://github.com/Chams22/bandit_approach_simulation/actions/workflows/tests.yml/badge.svg)](https://github.com/Chams22/bandit_approach_simulation/actions/workflows/tests.yml)
 
-The goal is to **maximize the True Positive Rate (TPR)** while controlling the **False Discovery Rate (FDR)** at level δ, using as few samples as possible — on both simulated and real megastudy data.
+Adaptive bandit algorithms for **sequential multiple testing with false discovery rate (FDR) control**, applied to simulated data and to **real behavioural megastudies** (vaccination nudges, physical activity). Based on Jamieson & Jain, *"A Bandit Approach to Sequential Experimental Design with False Discovery Control"* (NeurIPS 2018).
+
+**In short:** instead of testing every treatment arm equally, the algorithm samples promising arms more often, while anytime-valid p-values and the Benjamini–Hochberg procedure keep the FDR below δ at every step. Result: the same set of effective treatments is found **with a much smaller sampling budget** than uniform allocation.
+
+📄 Full report (in French): [`docs/rapport_bandits_adaptatifs_megaetudes.pdf`](docs/rapport_bandits_adaptatifs_megaetudes.pdf)
+
+Master's research project, M1 Statistics & Data Science, University of Montpellier (2025–2026).
+**Authors:** Ines Bahraoui, Chams-Eddine Bouaziz, Marouane Daoudi · **Supervisors:** Adrien Nguyen-Huu, Luka Boisgibault
+
+---
+
+## Key results
+
+Budget saved by adaptive vs uniform allocation to reach the **same** set of discoveries, on the four real megastudies (positive = adaptive is faster):
+
+![Adaptive vs uniform budget gap](figure_algo_compar/adapt_vs_uniform_gap_heatmap.png)
+
+Discovery trajectories of the four algorithms (JJ, V2, V3, SR) on each dataset:
+
+![Discovery trajectories](figure_algo_compar/positive_rate_curves.png)
 
 ---
 
@@ -10,7 +29,13 @@ The goal is to **maximize the True Positive Rate (TPR)** while controlling the *
 
 **Install dependencies:**
 ```bash
-pip install streamlit numpy pandas matplotlib scipy tqdm
+pip install -r requirements.txt
+```
+
+**Run the tests:**
+```bash
+pip install pytest
+pytest -q tests
 ```
 
 **Launch the Streamlit app:**
@@ -31,6 +56,8 @@ streamlit run streamlit_visu/app_bandit.py
 │   ├── adaptative_algorithm_successive_reject.py  # SR — Successive Rejects (best-arm identification)
 │   └── real_data_processing.py             # Pipeline for real megastudy data
 │
+├── tests/                          # Smoke tests (run by GitHub Actions on every push)
+├── docs/                           # Project report (PDF)
 ├── streamlit_visu/
 │   └── app_bandit.py               # Interactive Streamlit app (simulation + visualisation)
 │
