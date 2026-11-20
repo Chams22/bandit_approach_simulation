@@ -209,8 +209,10 @@ __marimo__/
 # Execution caches
 *.pkl
 **/run_experiment_cache.pkl
-
-# Execution caches
-*.pkl
-**/run_experiment_cache.pkl
 streamlit_visu/batch_results/
+
+# macOS
+.DS_Store
+
+# Old figures kept locally only
+figure_avant_modif/
